@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import os, shutil, socket, sys, tempfile, time
+import os, shutil, sys, tempfile, time
 from pathlib import Path
 
 HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()
 HF_USERNAME = os.environ.get("HF_USERNAME", "").strip() or os.environ.get("SPACE_AUTHOR_NAME", "").strip()
 DATASET_NAME = os.environ.get("DEVDATA_DATASET_NAME", "").strip() or "openclaw-hf-devdata"
 BACKUP_DATASET_NAME = os.environ.get("BACKUP_DATASET_NAME", "").strip() or os.environ.get("BACKUP_DATASET", "").strip() or "openclaw-hf-backup"
-JUPYTER_ROOT = Path(os.environ.get("JUPYTER_ROOT_DIR", "/home/node")).resolve()
+HOME_DIR = Path(os.environ.get("DEVDATA_HOME_DIR", "/home/node")).resolve()
 INTERVAL = int((os.environ.get("DEVDATA_SYNC_INTERVAL", "").strip() or "180"))
 # BUG FIX #5: Respect max file size so giant files don't stall uploads.
 # Matches the 50 MB ceiling in openclaw-sync.py; override with DEVDATA_MAX_FILE_BYTES.
@@ -43,16 +43,12 @@ EXCLUDE = {
     ".npm",
     ".yarn",
     "Trash",            # BUG FIX #4: covers .local/share/Trash (was ".local/share/Trash" — never matched)
-    ".ipynb_checkpoints",
     ".openclaw",
     "app",
-    "OpenClaw",
-    "OpenClaw-Workspace",
     "browser-deps",
     # Exclude Python/system package directories — these contain thousands of files
     # (e.g. .local/lib/python3.11/site-packages/) and must not be synced to the
-    # HF Dataset. Syncing them causes 10,000+ file fetches on every restore and
-    # can restore a broken jsonschema that crashes JupyterLab on boot.
+    # HF Dataset. Syncing them causes 10,000+ file fetches on every restore.
     ".local",
     "lib",
     "site-packages",
@@ -61,9 +57,9 @@ EXCLUDE = {
 
 
 def enabled():
-    jupyter_override = os.environ.get("OPENCLAW_HF_JUPYTER_ENABLED", "")
-    if jupyter_override.strip():
-        dev = is_true(jupyter_override)
+    terminal_override = os.environ.get("OPENCLAW_HF_TERMINAL_ENABLED", "")
+    if terminal_override.strip():
+        dev = is_true(terminal_override)
     else:
         dev = is_true(os.environ.get("DEV_MODE", ""))
     separate_dataset = DATASET_NAME != BACKUP_DATASET_NAME
@@ -71,18 +67,15 @@ def enabled():
         print("DevData sync disabled: DEVDATA_DATASET_NAME must be separate from BACKUP_DATASET_NAME.")
     return ENABLE and dev and bool(HF_TOKEN) and separate_dataset
 
-def validate_jupyter_paths() -> None:
-    # JupyterLab theme/settings live under ~/.jupyter and ~/.local/share/jupyter.
-    # If these are not writable, settings can appear to "reset" every restart.
-    for required in (JUPYTER_ROOT, Path("/home/node/.jupyter"), Path("/home/node/.local/share/jupyter")):
-        try:
-            required.mkdir(parents=True, exist_ok=True)
-            probe = required / ".devdata-write-check"
-            probe.write_text("ok", encoding="utf-8")
-            probe.unlink(missing_ok=True)
-        except Exception as exc:
-            kind = classify_error(exc)
-            print(f"DevData warning [{kind}]: {required} is not writable; Jupyter settings may not persist ({exc})")
+def validate_home_writable() -> None:
+    try:
+        HOME_DIR.mkdir(parents=True, exist_ok=True)
+        probe = HOME_DIR / ".devdata-write-check"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+    except Exception as exc:
+        kind = classify_error(exc)
+        print(f"DevData warning [{kind}]: {HOME_DIR} is not writable; sync will likely fail ({exc})")
 
 def repo_id(api) -> str:
     ns = HF_USERNAME
@@ -178,24 +171,6 @@ def snapshot(src: Path, dst: Path):
             except OSError:
                 pass
 
-def is_jupyter_running(port: int = 8888) -> bool:
-    """Return True if JupyterLab is already listening on *port*.
-
-    BUG FIX #2 (safety net): restore_once() must never run while JupyterLab
-    is active.  Overwriting files under JUPYTER_ROOT (runtime/ sockets, lab/
-    settings, kernel connection files) while JupyterLab is live corrupts its
-    state and causes it to exit within seconds.
-
-    The primary guard is the --restore / sync separation introduced in
-    BUG FIX #3, but this TCP probe stays as a hard backstop for any future
-    code path that might call restore_once() unexpectedly.
-    """
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=2):
-            return True
-    except OSError:
-        return False
-
 def restore_once(api, rid: str):
     from huggingface_hub import snapshot_download
     from huggingface_hub.errors import RepositoryNotFoundError
@@ -208,7 +183,7 @@ def restore_once(api, rid: str):
                 continue
             if str(rel) == ".gitattributes":
                 continue
-            target = JUPYTER_ROOT / rel
+            target = HOME_DIR / rel
             if p.is_dir():
                 target.mkdir(parents=True, exist_ok=True)
             elif p.is_file():
@@ -257,7 +232,7 @@ def sync_loop(api, rid: str):
     while True:
         tmp = Path(tempfile.mkdtemp(prefix="devdata-snap-"))
         try:
-            snapshot(JUPYTER_ROOT, tmp)
+            snapshot(HOME_DIR, tmp)
             upload_folder(
                 folder_path=str(tmp),
                 repo_id=rid,
@@ -292,35 +267,15 @@ if __name__ == "__main__":
     except RepositoryNotFoundError:
         api.create_repo(repo_id=rid, repo_type="dataset", private=True)
 
-    # ── BUG FIX #3: Restore must happen BEFORE JupyterLab starts ──────────
-    # The original code always called restore_once() here, but start.sh starts
-    # JupyterLab long before the gateway is ready and this script is launched.
-    # That made restore_once() ALWAYS run while JupyterLab was live, which
-    # overwrote its runtime/ sockets and settings → JupyterLab died.
-    #
-    # Fix: start.sh now calls  `python3 jupyter-devdata-sync.py --restore`
-    # BEFORE starting JupyterLab.  That --restore invocation does the restore
-    # and exits.  This background invocation (no --restore flag) skips straight
-    # to sync_loop so it never touches files while JupyterLab is running.
-    #
-    # BUG FIX #2 (safety net): If JupyterLab is somehow already running when
-    # this code path is reached, abort restore to avoid corrupting its state.
+    # start.sh calls `python3 terminal-devdata-sync.py --restore` once, early in
+    # boot, before health-server.js starts. That invocation restores files and
+    # exits. This background invocation (no --restore flag) skips straight to
+    # sync_loop — the terminal's shell sessions are spawned per-connection and
+    # have no on-disk runtime state for a restore to race with.
     if "--restore" in sys.argv:
-        # Synchronous restore mode — called by start.sh before JupyterLab.
-        validate_jupyter_paths()
+        validate_home_writable()
         restore_once(api, rid)
         raise SystemExit(0)
 
-    # Normal background sync mode — no restore; go straight to upload loop.
-    validate_jupyter_paths()
-    if is_jupyter_running():
-        print("DevData: background sync started (JupyterLab is live, restore already done by --restore).")
-    else:
-        # Fallback: JupyterLab not detected.  Should not normally happen
-        # because start.sh calls --restore before starting JupyterLab and then
-        # waits for the gateway before launching this background process.
-        # Log a warning and proceed to sync; do NOT restore to avoid racing
-        # with a JupyterLab that may be in the middle of starting up.
-        print("DevData: WARNING — JupyterLab not detected on port 8888. Skipping restore to be safe; starting sync loop.")
-
+    validate_home_writable()
     sync_loop(api, rid)

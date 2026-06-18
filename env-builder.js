@@ -511,8 +511,8 @@ const FIELDS = [
 {
     "g": "Startup",
     "icon": "⚡",
-    "k": "OPENCLAW_HF_JUPYTER_ENABLED",
-    "lbl": "Enable Jupyter terminal",
+    "k": "OPENCLAW_HF_TERMINAL_ENABLED",
+    "lbl": "Enable browser terminal",
     "type": "toggle",
     "ph": "false",
     "common": 1,
@@ -866,16 +866,6 @@ const FIELDS = [
 {
     "g": "Core",
     "icon": "⚡",
-    "k": "JUPYTER_TOKEN",
-    "lbl": "Jupyter access token (Must NOT be 'huggingface'. Run: openssl rand -hex 32)",
-    "type": "password",
-    "secret": 1,
-    "ph": "huggingface",
-    "common": 1
-  },
-  {
-    "g": "Core",
-    "icon": "⚡",
     "k": "OPENCLAW_DISABLE_BONJOUR",
     "lbl": "Disable Bonjour/mDNS discovery",
     "type": "toggle",
@@ -982,15 +972,6 @@ const FIELDS = [
     "tag": "advanced"
   },
 {
-    "g": "Runtime",
-    "icon": "⚙️",
-    "k": "JUPYTER_ROOT_DIR",
-    "lbl": "Jupyter root directory",
-    "type": "text",
-    "ph": "/home/node",
-    "tag": "advanced"
-  },
-  {
     "g": "Provider Keys",
     "icon": "🔑",
     "k": "ANTHROPIC_API_KEY",
@@ -1799,17 +1780,8 @@ const FIELDS = [
 {
     "g": "Deployment",
     "icon": "🧭",
-    "k": "JUPYTER_PORT",
-    "lbl": "Jupyter internal port",
-    "type": "number",
-    "ph": "8888",
-    "tag": "advanced"
-  },
-{
-    "g": "Deployment",
-    "icon": "🧭",
-    "k": "JUPYTER_BASE",
-    "lbl": "Jupyter public base path",
+    "k": "TERMINAL_BASE",
+    "lbl": "Terminal public base path",
     "type": "text",
     "ph": "/terminal",
     "tag": "advanced"
@@ -1991,13 +1963,13 @@ const GROUPS = ['All', ...[...new Set(FIELDS.map(f => f.g))], 'Custom Env'];
 
 function renderSidebar() {
   const sb = $('sidebar');
-  sb.innerHTML = '<div class="sb-label">Groups</div>';
+  sb.innerHTML = '';
   GROUPS.forEach(g => {
-    const btn = document.createElement('button');
-    btn.className = 'nav-btn' + (activeGroup === g ? ' active' : '');
+    const btn = document.createElement('div');
+    btn.className = 'eb-nav-item' + (activeGroup === g ? ' active' : '');
     btn.dataset.group = g;
     const id = 'nc_' + g.replace(/\W/g, '_');
-    btn.innerHTML = `<span class="nav-icon">${ICONS[g] || '📁'}</span><span class="nav-label">${esc(g)}</span><span class="nav-count" id="${id}">0</span>`;
+    btn.innerHTML = `<span class="eb-nav-icon">${ICONS[g] || '📁'}</span><span class="eb-nav-label">${esc(g)}</span><span class="eb-nav-count" id="${id}">0</span>`;
     btn.onclick = () => {
       activeGroup = g;
       renderSidebar();
@@ -2047,9 +2019,9 @@ function valueControlHTML(field) {
   if (field.type === 'toggle') {
     const initial = defaultValueFor(field);
     control = `
-      <div class="toggle-shell" data-toggle-row="1" data-field="${key}">
+      <div class="eb-toggle-row" data-toggle-row="1" data-field="${key}">
         <input type="hidden" data-key="${key}" value="${initial}">
-        <button type="button" class="tog ${initial === 'true' ? 'on' : ''}" data-toggle="${key}">${initial === 'true' ? 'On' : 'Off'}</button>
+        <button type="button" class="eb-tog ${initial === 'true' ? 'on' : ''}" data-toggle="${key}">${initial === 'true' ? 'On' : 'Off'}</button>
       </div>`;
   } else if (isTextarea) {
     control = `<textarea data-key="${key}" placeholder="${placeholder}" spellcheck="false"></textarea>`;
@@ -2062,57 +2034,53 @@ function valueControlHTML(field) {
   const pickerMode = field.type === 'model_list' ? 'multi' : 'single';
   const pickerLabel = field.type === 'model_list' ? 'Add model…' : 'Choose preset…';
   return `
-    <div class="picker-shell" data-picker-shell="${key}" data-picker-mode="${pickerMode}">
-      <div class="picker-row">
-        <select class="picker-select" data-pick-for="${key}" aria-label="${esc(field.lbl || field.k)} presets">
+    <div class="eb-picker-shell" data-picker-shell="${key}" data-picker-mode="${pickerMode}">
+      <div class="eb-picker-row">
+        <select data-pick-for="${key}" aria-label="${esc(field.lbl || field.k)} presets">
           <option value="">${esc(pickerLabel)}</option>
           ${renderOptionsHTML(field)}
           <option value="__custom__">Custom…</option>
         </select>
-        <button type="button" class="mini-btn" data-custom-for="${key}">+ Custom</button>
-        <button type="button" class="mini-btn" data-clear-for="${key}">Clear</button>
+        <button type="button" class="eb-mini-btn" data-custom-for="${key}">+ Custom</button>
+        <button type="button" class="eb-mini-btn" data-clear-for="${key}">Clear</button>
       </div>
       ${control}
     </div>`;
 
 }
 
-function cardHTML(f, origIdx = 0) {
-  const TAG_META = {
-    critical:   { cls: 'badge-critical',   lbl: 'critical'   },
-    credential: { cls: 'badge-credential', lbl: 'credential' },
-    feature:    { cls: 'badge-feature',    lbl: 'feature'    },
-    optional:   { cls: 'badge-optional',   lbl: 'optional'   },
-    advanced:   { cls: 'badge-advanced',   lbl: 'advanced'   },
-    build:      { cls: 'badge-build',      lbl: 'build-time' },
+function rowHTML(f, origIdx = 0) {
+  const TAG_LABELS = {
+    critical: 'critical', credential: 'credential', feature: 'feature',
+    optional: 'optional', advanced: 'advanced', build: 'build-time',
   };
-  const tm = TAG_META[f.tag] || TAG_META.optional;
-  const badge = `<span class="badge ${tm.cls}">${tm.lbl}</span>`;
+  const tag = TAG_LABELS[f.tag] ? f.tag : 'optional';
+  const badge = `<span class="badge ${tag}">${TAG_LABELS[tag]}</span>`;
 
-  return `<div class="env-card" data-row data-orig-idx="${origIdx}" data-group="${esc(f.g)}" data-search="${esc((f.g + ' ' + f.k + ' ' + (f.lbl || '') + ' ' + (f.tag || '')).toLowerCase())}" data-tag="${esc(f.tag || 'optional')}">
-    <div class="card-top">
-      <input type="checkbox" class="card-check" data-check="${esc(f.k)}" ${f.common ? 'data-common="1"' : ''}>
-      <div class="card-info">
-        <div class="card-key">${esc(f.k)}</div>
-        <div class="card-lbl">${esc(f.lbl || '')}</div>
+  return `<div class="eb-row" data-row data-orig-idx="${origIdx}" data-group="${esc(f.g)}" data-search="${esc((f.g + ' ' + f.k + ' ' + (f.lbl || '') + ' ' + (f.tag || '')).toLowerCase())}" data-tag="${esc(f.tag || 'optional')}">
+    <div>
+      <div class="eb-key">
+        <input type="checkbox" class="eb-check" data-check="${esc(f.k)}" ${f.common ? 'data-common="1"' : ''}>
+        <span>${esc(f.k)}</span>
+        ${badge}
       </div>
-      ${badge}
+      <div class="eb-desc">${esc(f.lbl || '')}</div>
     </div>
-    <div class="card-input">${valueControlHTML(f)}</div>
+    <div class="eb-field">${valueControlHTML(f)}</div>
   </div>`;
 }
 
 function addCustomRow(key = '', val = '', enabled = false) {
   const id = customCount++;
   const row = document.createElement('div');
-  row.className = 'custom-row';
+  row.className = 'eb-custom-row';
   row.dataset.customRow = id;
   row.dataset.enabled = enabled ? '1' : '0';
 
   row.innerHTML = `
     <input data-ck="${id}" placeholder="CUSTOM_ENV_NAME" value="${esc(key)}">
     <input data-cv="${id}" placeholder="value" value="${esc(val)}">
-    <button class="tog${enabled ? ' on' : ''}">${enabled ? 'On' : 'Off'}</button>
+    <button class="eb-tog${enabled ? ' on' : ''}">${enabled ? 'On' : 'Off'}</button>
   `;
 
   $('customRows').appendChild(row);
@@ -2210,12 +2178,14 @@ function updateCounts() {
 
 function filter() {
   const q = $('search').value.trim().toLowerCase();
-  document.querySelectorAll('.sec[data-section]').forEach(sec => {
+  document.querySelectorAll('.eb-section[data-section]').forEach(sec => {
+    const rows = sec.querySelectorAll('[data-row]');
+    if (!rows.length) return; // rowless sections (Custom Env) manage their own visibility below
     const grp = sec.dataset.section;
     const gMatch = activeGroup === 'All' || activeGroup === grp;
     if (!gMatch) { sec.classList.add('sec-hidden'); return; }
     let any = false;
-    sec.querySelectorAll('[data-row]').forEach(card => {
+    rows.forEach(card => {
       const m = !q || card.dataset.search.includes(q);
       card.classList.toggle('hidden', !m);
       if (m) any = true;
@@ -2224,7 +2194,7 @@ function filter() {
   });
   const cs = $('customSec');
   if (cs) cs.style.display = (activeGroup === 'All' || activeGroup === 'Custom Env') ? '' : 'none';
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.group === activeGroup));
+  document.querySelectorAll('.eb-nav-item').forEach(b => b.classList.toggle('active', b.dataset.group === activeGroup));
 }
 
 function clearForm() {
@@ -2362,7 +2332,7 @@ function toggleField(key) {
 }
 
 function sortSection(cardEl) {
-  const cards = cardEl && cardEl.closest('.cards');
+  const cards = cardEl && cardEl.closest('.eb-rows');
   if (!cards) return;
   const all     = [...cards.querySelectorAll('[data-row]')];
   const checked = all.filter(c =>  c.querySelector('[data-check]')?.checked);
@@ -2372,7 +2342,7 @@ function sortSection(cardEl) {
 }
 
 function sortAllSections() {
-  document.querySelectorAll('.cards').forEach(cards => {
+  document.querySelectorAll('.eb-rows').forEach(cards => {
     const all     = [...cards.querySelectorAll('[data-row]')];
     const checked = all.filter(c =>  c.querySelector('[data-check]')?.checked);
     const rest    = all.filter(c => !c.querySelector('[data-check]')?.checked);
@@ -2403,16 +2373,14 @@ function renderSections() {
   Object.entries(grouped).forEach(([grp, items]) => {
     try {
       const sec = document.createElement('div');
-      sec.className = 'sec';
+      sec.className = 'eb-section';
       sec.dataset.section = grp;
       sec.innerHTML = `
-        <div class="sec-header">
-          <span class="sec-icon">${ICONS[grp] || '📁'}</span>
-          <span class="sec-title">${esc(grp)}</span>
-          <span class="sec-count">${items.length}</span>
-          <div class="sec-line"></div>
+        <div class="eb-section-hd">
+          <span class="eb-section-name">${ICONS[grp] || '📁'} ${esc(grp)}</span>
+          <span class="eb-section-info">${items.length} variable${items.length > 1 ? 's' : ''}</span>
         </div>
-        <div class="cards">${items.map((f, i) => { try { return cardHTML(f, i); } catch(e) { console.error('cardHTML error for field', f.k, e); return ''; } }).join('')}</div>`;
+        <div class="eb-rows">${items.map((f, i) => { try { return rowHTML(f, i); } catch(e) { console.error('rowHTML error for field', f.k, e); return ''; } }).join('')}</div>`;
       wrap.appendChild(sec);
     } catch(e) {
       console.error('renderSections error for group', grp, e);
@@ -2466,7 +2434,7 @@ $('selectCommon').onclick = () => {
   refresh();
 };
 $('selectVisible').onclick = () => {
-  document.querySelectorAll('.sec:not(.sec-hidden) [data-row]:not(.hidden) [data-check]').forEach(c => c.checked = true);
+  document.querySelectorAll('.eb-section:not(.sec-hidden) [data-row]:not(.hidden) [data-check]').forEach(c => c.checked = true);
   sortAllSections();
   markSelected();
   refresh();

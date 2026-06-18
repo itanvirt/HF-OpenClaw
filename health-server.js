@@ -1,9 +1,11 @@
-// Single public entrypoint for HF Spaces: dashboard + reverse proxy to OpenClaw + JupyterLab.
+// Single public entrypoint for HF Spaces: dashboard + reverse proxy to OpenClaw + a browser terminal.
 const http = require("http");
 const https = require("https");
 const fs = require("fs");
 const net = require("net");
 const crypto = require("crypto");
+const pty = require("node-pty");
+const { WebSocketServer } = require("ws");
 
 function isTrue(value) {
   return /^(true|1|yes|on)$/i.test(String(value || "").trim());
@@ -18,21 +20,20 @@ function normalizeBase(value, fallback) {
 const PORT = Number.parseInt(process.env.PORT || "7861", 10);
 const GATEWAY_PORT = Number.parseInt(process.env.GATEWAY_PORT || "7860", 10);
 const GATEWAY_HOST = "127.0.0.1";
-const JUPYTER_PORT = Number.parseInt(process.env.JUPYTER_PORT || "8888", 10);
-const JUPYTER_HOST = "127.0.0.1";
-const JUPYTER_BASE = normalizeBase(process.env.JUPYTER_BASE, "/terminal");
+const TERMINAL_BASE = normalizeBase(process.env.TERMINAL_BASE, "/terminal");
+const TERMINAL_WS_PATH = `${TERMINAL_BASE}/ws`;
 const GATEWAY_TOKEN = (process.env.GATEWAY_TOKEN || "").trim();
 const SESSION_COOKIE = "hc_session";
 const LOGIN_PATH = "/login";
 const DEV_MODE_ENABLED = isTrue(process.env.DEV_MODE);
-// Explicit OPENCLAW_HF_JUPYTER_ENABLED=true enables Jupyter.
-// Otherwise DEV_MODE=true enables it unless OPENCLAW_HF_JUPYTER_ENABLED is explicitly false.
-// OPENCLAW_HF_JUPYTER_ENABLED=true is the explicit user override and always wins.
-const JUPYTER_ENABLED =
-  /^(true|1|yes|on)$/i.test(String(process.env.OPENCLAW_HF_JUPYTER_ENABLED || "").trim()) ||
+// Explicit OPENCLAW_HF_TERMINAL_ENABLED=true enables the terminal.
+// Otherwise DEV_MODE=true enables it unless OPENCLAW_HF_TERMINAL_ENABLED is explicitly false.
+// OPENCLAW_HF_TERMINAL_ENABLED=true is the explicit user override and always wins.
+const TERMINAL_ENABLED =
+  /^(true|1|yes|on)$/i.test(String(process.env.OPENCLAW_HF_TERMINAL_ENABLED || "").trim()) ||
   (
     isTrue(process.env.DEV_MODE) &&
-    !/^(false|0|no|off)$/i.test(String(process.env.OPENCLAW_HF_JUPYTER_ENABLED || "").trim())
+    !/^(false|0|no|off)$/i.test(String(process.env.OPENCLAW_HF_TERMINAL_ENABLED || "").trim())
   );
 const startTime = Date.now();
 const LLM_MODEL = process.env.LLM_MODEL || "Not Set";
@@ -47,7 +48,7 @@ const BACKUP_DATASET_NAME = (process.env.BACKUP_DATASET_NAME || process.env.BACK
 const DEVDATA_DATASET_NAME = (process.env.DEVDATA_DATASET_NAME || "openclaw-hf-devdata").trim() || "openclaw-hf-devdata";
 const DEVDATA_SYNC_INTERVAL = (process.env.DEVDATA_SYNC_INTERVAL || "180").trim() || "180";
 const DEVDATA_SEPARATE_DATASET = DEVDATA_DATASET_NAME !== BACKUP_DATASET_NAME;
-const DEVDATA_ENABLED = JUPYTER_ENABLED && HF_BACKUP_ENABLED && DEVDATA_SEPARATE_DATASET && !/^(off|false|0|no)$/i.test((process.env.DEVDATA || "on").trim());
+const DEVDATA_ENABLED = TERMINAL_ENABLED && HF_BACKUP_ENABLED && DEVDATA_SEPARATE_DATASET && !/^(off|false|0|no)$/i.test((process.env.DEVDATA || "on").trim());
 const APP_BASE = normalizeBase(process.env.APP_BASE, "/app");
 const SYNC_STATUS_FILE = "/tmp/sync-status.json";
 
@@ -388,7 +389,7 @@ function renderDashboard({ uptimeHuman, gatewayReady, sync, keepalive, authentic
   const gwTone = gatewayReady ? "ok" : "err";
 
   const actions = [`<a class="btn primary" data-space-link="app" href="${APP_BASE}/">Open Agent &rarr;</a>`];
-  if (JUPYTER_ENABLED) actions.push(`<a class="btn" data-space-link="terminal" href="${JUPYTER_BASE}/">Terminal</a>`);
+  if (TERMINAL_ENABLED) actions.push(`<a class="btn" data-space-link="terminal" href="${TERMINAL_BASE}/">Terminal</a>`);
   if (authenticated) {
     actions.push(`<a class="btn" data-space-link="env-builder" href="/env-builder">ENV Builder</a>`);
     actions.push(`<a class="btn ghost" href="/logout">Logout</a>`);
@@ -414,7 +415,7 @@ function renderDashboard({ uptimeHuman, gatewayReady, sync, keepalive, authentic
   <div class="pg-actions">${actions.join("\n    ")}</div>
 
   <p class="pg-hint">
-    Open Agent${JUPYTER_ENABLED ? " and Terminal" : ""} in a new tab from <code style="font-size:.9em;">*.hf.space</code>
+    Open Agent${TERMINAL_ENABLED ? " and Terminal" : ""} in a new tab from <code style="font-size:.9em;">*.hf.space</code>
     &mdash; embedded iframes may block session cookies. If you land on Login
     while embedded, this page automatically escapes to a top-level tab.
   </p>
@@ -646,6 +647,53 @@ function renderEnvBuilder() {
   }
 }
 
+function renderTerminalPage() {
+  try {
+    return fs.readFileSync(require("path").join(__dirname, "terminal.html"), "utf8")
+      .replace(/\{\{\s*ws_path\s*\}\}/g, TERMINAL_WS_PATH);
+  } catch (exc) {
+    return `<!doctype html><title>Terminal unavailable</title><pre>${escapeHtml(exc.message)}</pre>`;
+  }
+}
+
+// ── Browser terminal PTY bridge ──
+// Wires an authenticated WebSocket connection to a real shell via node-pty.
+// Wire protocol matches terminal.html: a leading "\x01RESIZE:{rows},{cols}"
+// control message, otherwise raw bytes passed straight through to the PTY.
+const wss = new WebSocketServer({ noServer: true });
+
+function attachPtyBridge(ws) {
+  const shell = process.env.SHELL || "/bin/bash";
+  const term = pty.spawn(shell, [], {
+    name: "xterm-256color",
+    cols: 80,
+    rows: 24,
+    cwd: process.env.HOME || "/home/node",
+    env: process.env,
+  });
+
+  term.onData((data) => {
+    if (ws.readyState === ws.OPEN) ws.send(data);
+  });
+  term.onExit(() => {
+    try { ws.close(); } catch {}
+  });
+
+  ws.on("message", (data, isBinary) => {
+    const text = isBinary ? null : data.toString("utf8");
+    if (text && text.startsWith("\x01RESIZE:")) {
+      const m = /^\x01RESIZE:(\d+),(\d+)$/.exec(text);
+      if (m) {
+        try { term.resize(Number(m[2]), Number(m[1])); } catch {}
+      }
+      return;
+    }
+    term.write(isBinary ? data : text);
+  });
+  ws.on("close", () => { try { term.kill(); } catch {} });
+  ws.on("error", () => { try { term.kill(); } catch {} });
+}
+
 // ── Generic proxy ──
 function proxiedPath(url, { stripPrefix = "" } = {}) {
   if (!stripPrefix) return url.pathname + url.search;
@@ -723,10 +771,10 @@ function proxyHTTP(req, res, targetHost, targetPort, options = {}) {
     req.pipe(pr);
   };
 
-  // First try the public path as-is because OpenClaw and JupyterLab are both
-  // configured with base paths. If a backend still returns 404, retry with the
-  // mount prefix stripped; that covers images built before the base-path config
-  // took effect and avoids the common HF Spaces "404 at /app or /terminal" trap.
+  // First try the public path as-is because OpenClaw is configured with a base
+  // path. If the backend still returns 404, retry with the mount prefix
+  // stripped; that covers images built before the base-path config took
+  // effect and avoids the common HF Spaces "404 at /app" trap.
   proxyOnce(url.pathname + url.search, !!options.retryWithoutPrefixOn404);
 }
 
@@ -750,12 +798,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === "/status") {
-    const [gatewayReady, jupyterReady] = await Promise.all([
-      probePort(GATEWAY_HOST, GATEWAY_PORT, "/health"),
-      JUPYTER_ENABLED ? probePort(JUPYTER_HOST, JUPYTER_PORT, `${JUPYTER_BASE}/login`) : Promise.resolve(false),
-    ]);
+    const gatewayReady = await probePort(GATEWAY_HOST, GATEWAY_PORT, "/health");
     res.writeHead(200, { "Content-Type": "application/json" });
-    return res.end(JSON.stringify({ model: LLM_MODEL, uptime: formatUptime(Date.now() - startTime), gatewayReady, jupyterReady, sync: getSyncStatus(), whatsapp: readGuardianStatus(), keepalive: getKeepaliveStatus() }));
+    return res.end(JSON.stringify({ model: LLM_MODEL, uptime: formatUptime(Date.now() - startTime), gatewayReady, sync: getSyncStatus(), whatsapp: readGuardianStatus(), keepalive: getKeepaliveStatus() }));
   }
 
   // Private space redirect — send users to the authenticated HF Spaces page.
@@ -888,30 +933,19 @@ const server = http.createServer(async (req, res) => {
     }));
   }
 
-  // JupyterLab terminal
-  if (pathname === JUPYTER_BASE || pathname.startsWith(JUPYTER_BASE + "/")) {
-    if (!JUPYTER_ENABLED) {
+  // Browser terminal (xterm.js + node-pty, served in-process — see attachPtyBridge)
+  if (pathname === TERMINAL_BASE || pathname === TERMINAL_BASE + "/") {
+    if (!TERMINAL_ENABLED) {
       res.writeHead(404, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ status: "disabled", message: "JupyterLab terminal is disabled. Remove DEV_MODE=false to re-enable." }));
+      return res.end(JSON.stringify({ status: "disabled", message: "Terminal is disabled. Set DEV_MODE=true or OPENCLAW_HF_TERMINAL_ENABLED=true to enable." }));
     }
     if (isDirectHfSpaceRequest) {
       res.writeHead(200, { "Content-Type": "text/html" });
       return res.end(renderPrivateRedirect(HF_SPACE_URL));
     }
     if (!requireAuth(req, res)) return;
-    // Inject the Jupyter token so JupyterLab skips its own login screen.
-    // Mirror start.sh logic: JUPYTER_TOKEN falls back to GATEWAY_TOKEN when
-    // unset or still the insecure default — that's what Jupyter was started with.
-    const rawJupyterToken = (process.env.JUPYTER_TOKEN || "").trim();
-    const jToken = (!rawJupyterToken || rawJupyterToken === "huggingface") ? GATEWAY_TOKEN : rawJupyterToken;
-    return proxyHTTP(req, res, JUPYTER_HOST, JUPYTER_PORT, {
-      publicPrefix: JUPYTER_BASE,
-      // Jupyter is started with --ServerApp.base_url=/terminal/, so keep the
-      // /terminal prefix when proxying. Stripping it breaks static/theme URLs.
-      stripPrefix: "",
-      retryWithoutPrefixOn404: false,
-      extraHeaders: jToken ? { authorization: `token ${jToken}` } : {},
-    });
+    res.writeHead(200, { "Content-Type": "text/html" });
+    return res.end(renderTerminalPage());
   }
 
   // OpenClaw Control UI mounted under /app. Retry without the mount prefix on
@@ -955,13 +989,24 @@ const server = http.createServer(async (req, res) => {
   proxyHTTP(req, res, GATEWAY_HOST, GATEWAY_PORT);
 });
 
-// ── WebSocket upgrade (JupyterLab kernels + terminals need this) ──
+// ── WebSocket upgrade (browser terminal PTY + gateway app need this) ──
 server.on("upgrade", (req, socket, head) => {
   const { pathname, search } = parseRequestUrl(req.url);
-  const isJupyter = JUPYTER_ENABLED && (pathname === JUPYTER_BASE || pathname.startsWith(JUPYTER_BASE + "/"));
+
+  if (TERMINAL_ENABLED && pathname === TERMINAL_WS_PATH) {
+    if (!isAuthorized(req)) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => attachPtyBridge(ws));
+    return;
+  }
+
   const isApp = pathname === APP_BASE || pathname.startsWith(APP_BASE + "/");
-  const [targetHost, targetPort] = isJupyter ? [JUPYTER_HOST, JUPYTER_PORT] : [GATEWAY_HOST, GATEWAY_PORT];
-  const publicPrefix = isJupyter ? JUPYTER_BASE : isApp ? APP_BASE : "";
+  const targetHost = GATEWAY_HOST;
+  const targetPort = GATEWAY_PORT;
+  const publicPrefix = isApp ? APP_BASE : "";
   const targetPath = pathname + search;
 
   const ps = net.connect(targetPort, targetHost, () => {
@@ -991,5 +1036,5 @@ server.timeout = 0;
 server.keepAliveTimeout = 65000;
 server.on("error", (err) => console.error(`[health-server] Server error:`, err));
 server.listen(PORT, "0.0.0.0", () =>
-  console.log(`🦞 OpenClaw :${PORT} → Gateway :${GATEWAY_PORT}${JUPYTER_ENABLED ? ` | Terminal :${JUPYTER_PORT} at ${JUPYTER_BASE}/` : " | Terminal disabled"}`),
+  console.log(`🦞 OpenClaw :${PORT} → Gateway :${GATEWAY_PORT}${TERMINAL_ENABLED ? ` | Terminal at ${TERMINAL_BASE}/` : " | Terminal disabled"}`),
 );

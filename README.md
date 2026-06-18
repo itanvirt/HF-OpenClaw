@@ -9,7 +9,6 @@ pinned: false
 license: mit
 tags:
   - openclaw
-  - jupyterlab
   - terminal
   - llm-gateway
 secrets:
@@ -34,7 +33,7 @@ secrets:
 [![HF Space](https://img.shields.io/badge/🤗%20HuggingFace-Space-blue?style=flat-square)](https://huggingface.co/spaces)
 [![OpenClaw](https://img.shields.io/badge/OpenClaw-Gateway-indigo?style=flat-square)](https://github.com/openclaw/openclaw)
 
-**Your always-on AI assistant — free, no server needed.** This Space runs the official [OpenClaw](https://openclaw.ai) gateway plus a Hugging Face-style JupyterLab terminal on one HF Spaces port, giving you a 24/7 AI chat assistant on Telegram (with WhatsApp pairing also available). It works with *any* large language model (LLM) – Claude, ChatGPT, Gemini, etc. – and even supports custom models via [OpenRouter](https://openrouter.ai). Deploy in minutes on the free HF Spaces tier (2 vCPU, 16GB RAM, 50GB) with automatic workspace backup to a HuggingFace Dataset so your chat history and settings persist across restarts.
+**Your always-on AI assistant — free, no server needed.** This Space runs the official [OpenClaw](https://openclaw.ai) gateway plus a browser-based terminal on one HF Spaces port, giving you a 24/7 AI chat assistant on Telegram (with WhatsApp pairing also available). It works with *any* large language model (LLM) – Claude, ChatGPT, Gemini, etc. – and even supports custom models via [OpenRouter](https://openrouter.ai). Deploy in minutes on the free HF Spaces tier (2 vCPU, 16GB RAM, 50GB) with automatic workspace backup to a HuggingFace Dataset so your chat history and settings persist across restarts.
 
 ## Table of Contents
 
@@ -52,7 +51,7 @@ secrets:
 - [🤖 LLM Providers](#-llm-providers)
 - [💻 Local Development](#-local-development)
 - [🔗 CLI Access](#-cli-access)
-- [💻 JupyterLab Terminal](#-jupyterlab-terminal)
+- [💻 Browser Terminal](#-browser-terminal)
 - [🏗️ Architecture](#-architecture)
 - [🐛 Troubleshooting](#-troubleshooting)
 - [📚 Links](#-links)
@@ -71,7 +70,7 @@ secrets:
 - 📊 **Visual Dashboard:** Lightweight landing page to monitor uptime, sync status, and active model — the native OpenClaw Control UI handles everything after you log in.
 - 🔔 **Webhooks:** Get notified on restarts or backup failures via standard webhooks.
 - 🔐 **Flexible Auth:** Secure the dashboard and Control UI with a gateway token.
-- 💻 **Terminal Out of the Box:** JupyterLab is available at `/terminal/` automatically when `GATEWAY_TOKEN` is set — no extra config needed. `GATEWAY_TOKEN` is reused as the terminal auth token. Set `DEV_MODE=false` explicitly to opt out.
+- 💻 **Terminal Out of the Box:** A browser terminal is available at `/terminal/` automatically when `GATEWAY_TOKEN` is set — no extra config needed. It's protected by the same dashboard session auth as the Control UI. Set `DEV_MODE=false` explicitly to opt out.
 - 🏠 **100% HF-Native:** Runs entirely on HuggingFace's free infrastructure (2 vCPU, 16GB RAM).
 
 ## 🚀 Quick Start
@@ -93,7 +92,7 @@ Navigate to your new Space's **Settings**, scroll down to the **Variables and se
 > [!TIP]
 > OpenClaw is completely flexible! You only need these three secrets to get started. The rest (Telegram, Cloudflare, HF backup) are optional and can be added later.
 
-**Terminal auto-enables when `GATEWAY_TOKEN` is set** — no extra secrets needed. `GATEWAY_TOKEN` is reused as `JUPYTER_TOKEN`, so the terminal is protected by the same credential as the Control UI. To set a different token, add `JUPYTER_TOKEN` as a Secret. To disable the terminal entirely, set `DEV_MODE=false` as a Variable.
+**Terminal auto-enables when `GATEWAY_TOKEN` is set** — no extra secrets needed. The terminal is protected by the same dashboard session login as the Control UI. To disable the terminal entirely, set `DEV_MODE=false` as a Variable.
 
 If you want to pin a specific OpenClaw release instead of `latest`, add `OPENCLAW_VERSION` under **Variables** in your Space settings. For Docker Spaces, HF passes Variables as build args during image build, so these should be Variables, not Secrets (except tokens).
 
@@ -356,20 +355,20 @@ openclaw channels login --gateway https://YOUR_SPACE_NAME.hf.space
 # When prompted, enter your GATEWAY_TOKEN
 ```
 
-## 💻 JupyterLab Terminal
+## 💻 Browser Terminal
 
-The Space includes the Hugging Face JupyterLab template behavior inside the same container:
+The Space includes a browser-based terminal (xterm.js + node-pty) running in the same process as the dashboard:
 
-| Path | Service | Internal Port | Notes |
-| :--- | :--- | :--- | :--- |
-| `/` | OpenClaw dashboard | `7861` | Public HF Spaces entrypoint |
-| `/app/` | OpenClaw Control UI (native) | `7860` | Mounted behind the local reverse proxy |
-| `/terminal/` | JupyterLab terminal | `8888` | Auto-enabled when `GATEWAY_TOKEN` is set; uses `GATEWAY_TOKEN` as auth token unless `JUPYTER_TOKEN` is set separately. Set `DEV_MODE=false` to disable. |
+| Path | Service | Notes |
+| :--- | :--- | :--- |
+| `/` | OpenClaw dashboard | Public HF Spaces entrypoint |
+| `/app/` | OpenClaw Control UI (native) | Mounted behind the local reverse proxy |
+| `/terminal/` | Browser terminal | Auto-enabled when `GATEWAY_TOKEN` is set; protected by the same dashboard session login as the Control UI. Set `DEV_MODE=false` to disable. |
 
-When enabled, the terminal notebook root defaults to `/home/node` (stable + writable by default). To browse a broader tree, set `JUPYTER_ROOT_DIR=/home`. Handy shortcuts are also created: `OpenClaw`, `OpenClaw-Workspace`, and `OpenClaw-Home`.
+When enabled, each terminal connection spawns a fresh shell rooted at `$HOME` (`/home/node`).
 
 > [!IMPORTANT]
-> No extra secret needed — `GATEWAY_TOKEN` is automatically reused as `JUPYTER_TOKEN`. Set a separate `JUPYTER_TOKEN` secret only if you want a different terminal credential.
+> No extra secret needed — the terminal reuses the dashboard's session login, so anyone who can authenticate to the dashboard can open a shell.
 
 ## 🏗️ Architecture
 
@@ -380,7 +379,7 @@ OpenClaw uses a multi-layered approach to ensure stability and persistence on Hu
 
 - **Dashboard (`/`)**: Landing page with status, monitoring, and keep-alive tools. Terminal button appears when DEV mode is enabled (default when `GATEWAY_TOKEN` is set).
 - **Control UI (`/app/`)**: Native OpenClaw interface for managing agents and channels, proxied to the OpenClaw gateway on internal port `7860`.
-- **JupyterLab Terminal (`/terminal/`)**: Browser terminal/notebook server on internal port `8888` (auto-enabled when `GATEWAY_TOKEN` is set; set `DEV_MODE=false` to disable).
+- **Browser Terminal (`/terminal/`)**: xterm.js + node-pty terminal served from the same process as the dashboard (auto-enabled when `GATEWAY_TOKEN` is set; set `DEV_MODE=false` to disable).
 - **Health Check (`/health`)**: Endpoint for uptime monitoring and readiness probes.
 - **Sync Engine**: Python background process managing HF Dataset persistence.
 - **Transparent Proxy**: Interceptor for requests to blocked domains (Telegram, etc.).
@@ -391,14 +390,14 @@ OpenClaw uses a multi-layered approach to ensure stability and persistence on Hu
 2. Resolve backup namespace and restore workspace from HF Dataset.
 3. Generate `openclaw.json` configuration.
 4. Launch background tasks (auto-sync, channel helpers).
-5. Start the local dashboard/reverse proxy and OpenClaw gateway (JupyterLab starts automatically when `GATEWAY_TOKEN` is set; set `DEV_MODE=false` to opt out).
+5. Start the local dashboard/reverse proxy and OpenClaw gateway (the browser terminal is available automatically when `GATEWAY_TOKEN` is set; set `DEV_MODE=false` to opt out).
 
 </details>
 
 ## 🐛 Troubleshooting
 
 - **Private Space 404:** If your Space is private, raw `https://<space>.hf.space/app/` or `/terminal/` links can show Hugging Face's own 404 page when opened outside the embedded App session. Open the Space's **App** tab first, then use the in-page dashboard buttons for `/app/` and `/terminal/`.
-- **Terminal 404 or redirect loop:** Open `/terminal/` with the trailing slash from the dashboard/App tab, rebuild after Dockerfile changes, and confirm `JUPYTER_TOKEN` is set correctly if you changed the default.
+- **Terminal 404 or redirect loop:** Open `/terminal/` with the trailing slash from the dashboard/App tab and confirm `DEV_MODE` (or `OPENCLAW_HF_TERMINAL_ENABLED`) is set to enable it; log in to the dashboard first since the terminal requires the same session auth.
 - **Control UI 404:** Open `/app/` with the trailing slash from the dashboard/App tab; the reverse proxy rewrites backend redirects into this mount path.
 - **Missing secrets:** Ensure `LLM_MODEL`, `LLM_API_KEY`, and `GATEWAY_TOKEN` are set in your Space **Settings → Secrets**.
 - **Telegram bot issues:** Verify your `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USERS`. Check Space logs for lines like `📱 Enabling Telegram`.

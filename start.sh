@@ -68,10 +68,9 @@ CLOUDFLARE_PROXY_URL="$(trim_var "${CLOUDFLARE_PROXY_URL:-}")"
 
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 APP_BASE="$(trim_var "${APP_BASE:-/app}")"
-JUPYTER_BASE="$(trim_var "${JUPYTER_BASE:-/terminal}")"
+TERMINAL_BASE="$(trim_var "${TERMINAL_BASE:-/terminal}")"
 PORT="$(trim_var "${PORT:-7861}")"
 GATEWAY_PORT="$(trim_var "${GATEWAY_PORT:-7860}")"
-JUPYTER_PORT="$(trim_var "${JUPYTER_PORT:-8888}")"
 BACKUP_DATASET_NAME="$(trim_var "${BACKUP_DATASET_NAME:-${BACKUP_DATASET:-openclaw-hf-backup}}")"
 SPACE_AUTHOR_NAME="$(trim_var "${SPACE_AUTHOR_NAME:-}")"
 SPACE_HOST="$(trim_var "${SPACE_HOST:-}")"
@@ -94,7 +93,7 @@ if hc_is_true "$DEV_MODE_NORMALIZED"; then
   DEV_MODE_ENABLED=true
 fi
 # Auto-enable DEV_MODE when GATEWAY_TOKEN is set and DEV_MODE was not explicitly configured.
-# GATEWAY_TOKEN doubles as JUPYTER_TOKEN (see start_jupyter_once) — no extra secret required.
+# The browser terminal reuses the dashboard's session auth — no extra secret required.
 if [ "$DEV_MODE_ENABLED" != "true" ] && [ -z "${DEV_MODE:-}" ] && [ -n "${GATEWAY_TOKEN:-}" ]; then
   DEV_MODE_ENABLED=true
   : # auto-enable is silent; set DEV_MODE=false to opt out
@@ -133,7 +132,7 @@ else
 fi
 echo ""
 echo "  ╔══════════════════════════════════════════╗"
-echo "  ║     🦞 OpenClaw + 💻 JupyterLab      ║"
+echo "  ║   🦞 OpenClaw + 💻 Browser Terminal   ║"
 echo "  ╚══════════════════════════════════════════╝"
 echo ""
 
@@ -306,8 +305,8 @@ export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-/home/node/.local}"
 export npm_config_prefix="$NPM_CONFIG_PREFIX"
 export PYTHONUSERBASE="${PYTHONUSERBASE:-/home/node/.local}"
 export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
-# Show current working directory in terminal prompt (JupyterLab terminals can
-# otherwise display only "$" when PS1 is unset/minimal).
+# Show current working directory in terminal prompt (PTY shells launched by
+# the browser terminal can otherwise display only "$" when PS1 is unset/minimal).
 if [ -z "${PS1:-}" ] || [ "$PS1" = "$ " ]; then
   export PS1='\u@\h:\w\$ '
 fi
@@ -873,36 +872,18 @@ fi
 if [ -n "${CLOUDFLARE_PROXY_URL:-}" ]; then
   echo "Proxy     : ${CLOUDFLARE_PROXY_URL}"
 fi
-# OPENCLAW_HF_JUPYTER_ENABLED env var se override allow karo
-# (env-builder "Enable Jupyter terminal" toggle yahi set karta hai)
-if hc_is_true "${OPENCLAW_HF_JUPYTER_ENABLED:-false}"; then
-  RUNTIME_JUPYTER_ENABLED=true
+# OPENCLAW_HF_TERMINAL_ENABLED env var allows an explicit override
+# (env-builder's "Enable browser terminal" toggle sets this).
+if hc_is_true "${OPENCLAW_HF_TERMINAL_ENABLED:-false}"; then
+  RUNTIME_TERMINAL_ENABLED=true
 else
-  RUNTIME_JUPYTER_ENABLED="$DEV_MODE_ENABLED"
+  RUNTIME_TERMINAL_ENABLED="$DEV_MODE_ENABLED"
 fi
-# Add user bin to PATH for jupyter-lab (installed in Dockerfile when DEV_MODE=true)
-export PATH="$HOME/.local/bin:$PATH"
-
-# Runtime install fallback: only attempt if DEV_MODE is enabled but install failed during build
-if [ "$DEV_MODE_ENABLED" = "true" ] && ! python3 -c "import jupyterlab" >/dev/null 2>&1; then
-  echo "Terminal  : installing JupyterLab..."
-  if python3 -m pip install -q --user --no-cache-dir --break-system-packages "jupyterlab>=4.2,<5" "tornado>=6.3" "ipywidgets>=8.1" >/dev/null 2>&1; then
-    echo "Terminal  : installed"
-    python3 -c "from pathlib import Path; import shutil, jupyter_server; d=Path(jupyter_server.__file__).parent/'templates'; d.mkdir(parents=True,exist_ok=True); shutil.copyfile('/home/node/app/login.html', d/'login.html')" || true
-  else
-    echo "Terminal  : install failed — disabling for this boot"
-    RUNTIME_JUPYTER_ENABLED=false
-  fi
-fi
-if [ "$RUNTIME_JUPYTER_ENABLED" = "true" ] && ! python3 -c "import jupyterlab" >/dev/null 2>&1; then
-  echo "WARNING: jupyter-lab still unavailable; disabling terminal for this boot."
-  RUNTIME_JUPYTER_ENABLED=false
-fi
-export OPENCLAW_HF_JUPYTER_ENABLED="$RUNTIME_JUPYTER_ENABLED"
+export OPENCLAW_HF_TERMINAL_ENABLED="$RUNTIME_TERMINAL_ENABLED"
 
 if [ -n "${SPACE_HOST:-}" ]; then
-  if [ "$RUNTIME_JUPYTER_ENABLED" = "true" ]; then
-    echo "Routes    : /app/ (Control UI), /terminal/ (JupyterLab)"
+  if [ "$RUNTIME_TERMINAL_ENABLED" = "true" ]; then
+    echo "Routes    : /app/ (Control UI), ${TERMINAL_BASE}/ (Terminal)"
   else
     echo "Routes    : /app/ (Control UI)"
   fi
@@ -994,110 +975,19 @@ export HUGGINGFACE_HUB_TOKEN="${HUGGINGFACE_HUB_TOKEN:-${HF_TOKEN:-}}"
 node /home/node/app/health-server.js &
 HEALTH_PID=$!
 
-start_jupyter_once() {
-  [ "$RUNTIME_JUPYTER_ENABLED" = "true" ] || return 0
-  if [ -n "${JUPYTER_PID:-}" ] && kill -0 "$JUPYTER_PID" 2>/dev/null; then
-    return 0
-  fi
-
-  # GATEWAY_TOKEN fallback: if JUPYTER_TOKEN is unset or still the insecure default,
-  # reuse GATEWAY_TOKEN. Both protect the same Space, so the credential is equivalent.
-  if { [ -z "${JUPYTER_TOKEN:-}" ] || [ "${JUPYTER_TOKEN}" = "huggingface" ]; } && [ -n "${GATEWAY_TOKEN:-}" ]; then
-    JUPYTER_TOKEN="$GATEWAY_TOKEN"
-  fi
-
-  # Security guard: refuse to start JupyterLab with the insecure default token.
-  # JupyterLab exposes a full shell — a weak token is equivalent to no auth.
-  if [ -z "${JUPYTER_TOKEN:-}" ] || [ "${JUPYTER_TOKEN}" = "huggingface" ]; then
-    echo "ERROR: JUPYTER_TOKEN is unset or still set to the insecure default (\"huggingface\")." >&2
-    echo "       JupyterLab grants full shell access. Set a strong, unique token in your Space secrets." >&2
-    echo "       Hint:  openssl rand -hex 32" >&2
-    echo "       DEV_MODE active but JupyterLab will NOT start until JUPYTER_TOKEN is changed." >&2
-    return 1
-  fi
-  JUPYTER_ROOT_DIR="${JUPYTER_ROOT_DIR:-/home/node}"
-  if [ "$JUPYTER_ROOT_DIR" = "/home/node/.openclaw/workspace" ] && [ "$DEVDATA_ENABLED" = "true" ]; then
-    echo "Jupyter root was set to OpenClaw workspace; moving Jupyter root to /home/node/devdata to keep BACKUP and DEVDATA datasets separate."
-    JUPYTER_ROOT_DIR="/home/node/devdata"
-  fi
-  mkdir -p "$JUPYTER_ROOT_DIR"
-  export JUPYTER_ROOT_DIR
-  if [ "$JUPYTER_ROOT_DIR" != "/home/node/app" ]; then
-    if [ -L "$JUPYTER_ROOT_DIR/OpenClaw" ] || [ ! -e "$JUPYTER_ROOT_DIR/OpenClaw" ]; then
-      ln -sfn /home/node/app "$JUPYTER_ROOT_DIR/OpenClaw"
-    fi
-  fi
-  if [ "$JUPYTER_ROOT_DIR" != "/home/node/.openclaw/workspace" ]; then
-    if [ -L "$JUPYTER_ROOT_DIR/OpenClaw-Workspace" ] || [ ! -e "$JUPYTER_ROOT_DIR/OpenClaw-Workspace" ]; then
-      ln -sfn /home/node/.openclaw/workspace "$JUPYTER_ROOT_DIR/OpenClaw-Workspace"
-    fi
-  fi
-  if [ "$JUPYTER_ROOT_DIR" != "/home/node/.openclaw" ]; then
-    if [ -L "$JUPYTER_ROOT_DIR/OpenClaw-Home" ] || [ ! -e "$JUPYTER_ROOT_DIR/OpenClaw-Home" ]; then
-      ln -sfn /home/node/.openclaw "$JUPYTER_ROOT_DIR/OpenClaw-Home"
-    fi
-  fi
-
-  # Pre-create runtime directory
-  mkdir -p "$JUPYTER_ROOT_DIR/.jupyter"
-
-  echo "Terminal  : starting (root: $JUPYTER_ROOT_DIR)"
-  JUPYTER_LOG_FILE="/tmp/jupyterlab.log"
-  
-  # Use explicit Python to avoid PATH issues; set memory-friendly limits
-  export PYTHONPATH=""
-  python3 -m jupyterlab \
-      --ip 127.0.0.1 \
-      --port 8888 \
-      --no-browser \
-      --IdentityProvider.token="$JUPYTER_TOKEN" \
-      --ServerApp.base_url=/terminal/ \
-      --ServerApp.terminals_enabled=True \
-      --ServerApp.terminado_settings='{"shell_command":["/bin/bash","-i"]}' \
-      --ServerApp.allow_origin='*' \
-      --ServerApp.allow_remote_access=True \
-      --ServerApp.trust_xheaders=True \
-      --ServerApp.tornado_settings="{'headers': {'Content-Security-Policy': 'frame-ancestors *'}}" \
-      --IdentityProvider.cookie_options="{'SameSite': 'None', 'Secure': True}" \
-      --ServerApp.disable_check_xsrf=True \
-      --LabApp.news_url=None \
-      --LabApp.check_for_updates_class=jupyterlab.NeverCheckForUpdate \
-      --ServerApp.log_level=WARN \
-      --ServerApp.root_dir="$JUPYTER_ROOT_DIR" \
-      >> "$JUPYTER_LOG_FILE" 2>&1 &
-  JUPYTER_PID=$!
-  export JUPYTER_PID
-  echo "Terminal  : started (PID: $JUPYTER_PID)"
-}
-
-# BUG FIX #3: DevData restore must happen BEFORE JupyterLab starts.
-# The background jupyter-devdata-sync.py process is only launched AFTER the
-# gateway is ready (20-90 s from now). If restore ran there, JupyterLab would
-# already be live and the file writes would corrupt its runtime state → crash.
-# Running --restore here (synchronous, before JupyterLab) solves that.
-if [ "$RUNTIME_JUPYTER_ENABLED" = "true" ] && \
+# DevData restore — runs before the background sync loop starts so the
+# terminal's $HOME has prior session state (dotfiles, workspace files) as
+# soon as a user connects. The browser terminal's shells are spawned
+# per-connection by health-server.js, so there is no separate process whose
+# runtime state restore could race with or corrupt.
+if [ "$RUNTIME_TERMINAL_ENABLED" = "true" ] && \
    [ "$DEVDATA_ENABLED" = "true" ] && \
    [ -n "${HF_TOKEN:-}" ] && \
-   [ -f "/home/node/app/jupyter-devdata-sync.py" ] && \
+   [ -f "/home/node/app/terminal-devdata-sync.py" ] && \
    [ "${DEVDATA_DATASET_NAME:-openclaw-hf-devdata}" != "${BACKUP_DATASET_NAME:-openclaw-hf-backup}" ]; then
   echo "DevData   : restoring workspace..."
-  python3 /home/node/app/jupyter-devdata-sync.py --restore 2>/dev/null || \
+  python3 /home/node/app/terminal-devdata-sync.py --restore 2>/dev/null || \
     echo "DevData   : restore warning (non-fatal); continuing startup."
-fi
-
-# Fix: reinstall jsonschema AFTER devdata restore — restore can overwrite a broken
-# version from .local/lib/python3.11/site-packages into the workspace, causing
-# JupyterLab to crash with a circular import error on every boot.
-if [ "$DEV_MODE_ENABLED" = "true" ]; then
-  if ! python3 -c "import jsonschema" >/dev/null 2>&1; then
-    python3 -m pip install -q --force-reinstall --no-cache-dir --break-system-packages "jsonschema>=4.0" >/dev/null 2>&1 || true
-  fi
-fi
-
-# 10.5. Start JupyterLab Terminal on internal port 8888 (DEV_MODE only)
-# Accessible via /terminal/ path through the health-server proxy
-if [ "$RUNTIME_JUPYTER_ENABLED" = "true" ]; then
-  start_jupyter_once
 fi
 
 if [ -n "${CLOUDFLARE_WORKERS_TOKEN:-}" ]; then
@@ -1661,19 +1551,17 @@ start_background_devdata_sync() {
     echo "DevData  : disabled (DEVDATA_DATASET_NAME must be separate from BACKUP_DATASET_NAME)"
     return 0
   fi
-  if [ ! -f "/home/node/app/jupyter-devdata-sync.py" ]; then
+  if [ ! -f "/home/node/app/terminal-devdata-sync.py" ]; then
     echo "DevData  : script missing; skipped"
     return 0
   fi
-  # BUG FIX #1: Guard against spawning a second devdata-sync process on every
-  # gateway restart. Without this check, each restart launched a fresh
-  # jupyter-devdata-sync.py which called restore_once() while JupyterLab was
-  # already running, corrupting its runtime state and killing it.
+  # Guard against spawning a second devdata-sync process on every gateway
+  # restart — each invocation only needs to run once for the life of the boot.
   if [ -n "${DEVDATA_SYNC_PID:-}" ] && kill -0 "$DEVDATA_SYNC_PID" 2>/dev/null; then
     return 0
   fi
   echo "DevData  : enabled (dataset=${DEVDATA_DATASET_NAME:-openclaw-hf-devdata})"
-  python3 -u /home/node/app/jupyter-devdata-sync.py >> /tmp/devdata-sync.log 2>&1 &
+  python3 -u /home/node/app/terminal-devdata-sync.py >> /tmp/devdata-sync.log 2>&1 &
   DEVDATA_SYNC_PID=$!
 }
 
@@ -1717,22 +1605,6 @@ while true; do
     node /home/node/app/health-server.js &
     HEALTH_PID=$!
     echo "Health server restarted (PID: $HEALTH_PID)"
-  fi
-
-  # Check JupyterLab process - restart if died unexpectedly
-  if [ "$RUNTIME_JUPYTER_ENABLED" = "true" ]; then
-    if [ -n "${JUPYTER_PID:-}" ]; then
-      if ! kill -0 "$JUPYTER_PID" 2>/dev/null; then
-        echo "Warning: JupyterLab exited (PID $JUPYTER_PID dead); checking log..."
-        tail -5 /tmp/jupyterlab.log 2>/dev/null || echo "No log file"
-        echo "Attempting JupyterLab restart..."
-        unset JUPYTER_PID
-        start_jupyter_once
-      fi
-    else
-      # First start
-      start_jupyter_once
-    fi
   fi
 
   if [ "${AUTO_DOCTOR:-false}" = "true" ]; then
@@ -1806,7 +1678,7 @@ while true; do
   GATEWAY_RESTART_COUNT=$((GATEWAY_RESTART_COUNT + 1))
   if [ "$GATEWAY_MAX_RESTARTS" != "0" ] && [ "$GATEWAY_RESTART_COUNT" -ge "$GATEWAY_MAX_RESTARTS" ]; then
     echo "Gateway exited with code ${GATEWAY_EXIT_CODE}; restart limit (${GATEWAY_MAX_RESTARTS}) reached."
-    echo "Gateway stopped — JupyterLab and env-builder still running."
+    echo "Gateway stopped — terminal and env-builder still running."
     break
   fi
 
