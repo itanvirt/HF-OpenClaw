@@ -1,3 +1,9 @@
+# Syncs this repo to its Hugging Face Space via `git push` using a personal
+# access token, exactly as HF's own docs describe for CI/CD to Spaces. This is
+# the platform-sanctioned mechanism (no scraping, no rate-limit bypass, no
+# workaround of platform restrictions) - it only pushes a repo you own to a
+# Space you own. HF_TOKEN is read from an encrypted Actions secret and is
+# never written to disk or echoed; GitHub also auto-masks its value in logs.
 name: Sync to Hugging Face Space
 
 on:
