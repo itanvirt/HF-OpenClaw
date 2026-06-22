@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
+<title>ENV Builder &middot; OpenClaw</title>
+<link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-brand">
+    <div class="nav-glyph"><div class="nav-glyph-dot"></div></div>
+    <span class="nav-name">OpenClaw</span>
+    <div class="nav-sep"></div>
+    <span class="nav-tag">ENV Builder</span>
+  </div>
+  <div class="spacer"></div>
+  <div class="nav-actions">
+    <a class="btn sm ghost" href="/">&larr; Dashboard</a>
+    <a class="btn sm ghost" href="/logout">Logout</a>
+  </div>
+</nav>
+
+<div class="eb-root">
+
+  <!-- SIDEBAR -->
+  <aside class="eb-nav">
+    <div class="eb-nav-lbl">Groups</div>
+    <div id="sidebar"></div>
+  </aside>
+
+  <!-- MAIN AREA -->
+  <main class="eb-main">
+
+    <div class="eb-search-wrap">
+      <span class="eb-search-ico">&#9906;</span>
+      <input class="eb-search" id="search" type="search" placeholder="Search variables&hellip;" autocomplete="off" spellcheck="false">
+    </div>
+
+    <div class="eb-toolbar">
+      <span class="eb-toolbar-hint">Tip: start with <strong>&#9889; Required</strong>, fill in keys, then <strong>Generate Bundle</strong>.</span>
+      <button id="selectRequired" class="btn sm" title="Select all critical variables">&#9889; Required</button>
+      <button id="selectCommon" class="btn sm">&#9733; Common</button>
+      <button id="selectVisible" class="btn sm">&#9745; Visible</button>
+      <button id="clearAll" class="btn sm ghost">&#10005; Clear</button>
+    </div>
+
+    <!-- Tag legend (collapsible) -->
+    <details class="tag-legend" id="tagLegend">
+      <summary class="legend-summary">
+        <span class="legend-chips">
+          <span class="badge critical">critical</span>
+          <span class="badge credential">credential</span>
+          <span class="badge feature">feature</span>
+          <span class="badge optional">optional</span>
+          <span class="badge advanced">advanced</span>
+          <span class="badge build">build-time</span>
+        </span>
+        <span class="legend-hint">what do these mean?</span>
+      </summary>
+      <div class="legend-body">
+        <div class="legend-row"><span class="badge critical">critical</span><span>Space won't work without this</span></div>
+        <div class="legend-row"><span class="badge credential">credential</span><span>Sensitive key or token &mdash; never share</span></div>
+        <div class="legend-row"><span class="badge feature">feature</span><span>Enables a specific optional feature</span></div>
+        <div class="legend-row"><span class="badge optional">optional</span><span>Safe to change &mdash; nothing breaks</span></div>
+        <div class="legend-row"><span class="badge advanced">advanced</span><span>Power-user setting &mdash; wrong value causes issues</span></div>
+        <div class="legend-row"><span class="badge build">build-time</span><span>Needs an HF Space rebuild to fully take effect</span></div>
+        <div class="legend-tip">Tip: type a tag name in search to filter by it.</div>
+      </div>
+    </details>
+
+    <div id="sections"></div>
+
+    <!-- Custom Env section -->
+    <div id="customSec" class="eb-section" data-section="Custom Env">
+      <div class="eb-section-hd">
+        <span class="eb-section-name">Custom Env</span>
+      </div>
+      <div id="customRows"></div>
+      <button id="addCustom" class="btn sm" style="margin-top:6px;">+ Add variable</button>
+    </div>
+
+  </main>
+
+  <!-- RIGHT PANEL -->
+  <aside class="eb-panel">
+
+    <div class="panel-card">
+      <div class="panel-lbl">Summary</div>
+      <div id="summary">No variables selected yet.</div>
+    </div>
+
+    <div class="panel-card">
+      <div class="panel-lbl">Bundle output</div>
+      <button id="generateBundle" class="btn primary sm" style="width:100%;"># Generate Bundle</button>
+      <textarea id="bundleOut" class="env-preview" placeholder="Click Generate to build your bundle&hellip;" readonly spellcheck="false"></textarea>
+      <input type="text" id="envLineOut" class="env-preview" style="min-height:auto;" placeholder="OPENCLAW_HF_ENV_BUNDLE=&hellip;" readonly spellcheck="false">
+      <div class="panel-actions">
+        <div class="row-btns">
+          <button id="copyBundle" class="btn primary sm">&#10118; Bundle</button>
+          <button id="copyEnvLine" class="btn sm">&#10118; Env Line</button>
+          <button id="copyJson" class="btn sm">&#10118; JSON</button>
+        </div>
+        <button id="applyBundle" class="btn sm ghost">&#8634; Apply bundle</button>
+      </div>
+    </div>
+
+    <div class="panel-card">
+      <div class="panel-lbl">Import</div>
+      <textarea id="importText" class="env-preview" placeholder="Paste .env, JSON, or OPENCLAW_HF_ENV_BUNDLE=&hellip; here" spellcheck="false"></textarea>
+      <button id="applyImport" class="btn primary sm" style="width:100%;margin-top:8px;">&#8595; Import &amp; Apply</button>
+    </div>
+
+  </aside>
+
+</div><!-- /eb-root -->
+
+<div id="toast" class="toast">Copied &#10003;</div>
+
+<!-- env-builder.js provides MODEL_CATALOGS, FIELDS, ICONS and all logic -->
+<script src="env-builder.js"></script>
+
+</body>
+</html>
