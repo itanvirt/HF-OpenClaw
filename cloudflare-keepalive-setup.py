@@ -162,7 +162,7 @@ def setup_keepalive_worker(api_token: str, account_id: str, subdomain: str) -> N
         write_keepalive_status({"configured": False, "status": "skipped", "message": "SPACE_HOST could not be determined."})
         return
 
-    cron = os.environ.get("CLOUDFLARE_KEEPALIVE_CRON", "*/10 * * * *").strip()
+    cron = os.environ.get("CLOUDFLARE_KEEPALIVE_CRON", "0 0 * * *").strip()
     space_host = space_host.removeprefix("https://").removeprefix("http://").split("/")[0]
     target_url = os.environ.get("CLOUDFLARE_KEEPALIVE_URL", f"https://{space_host}/health").strip()
     worker_name = derive_keepalive_worker_name()

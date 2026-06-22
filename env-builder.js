@@ -932,7 +932,7 @@ const FIELDS = [
     "k": "CLOUDFLARE_KEEPALIVE_CRON",
     "lbl": "Keepalive cron schedule",
     "type": "text",
-    "ph": "*/5 * * * *",
+    "ph": "0 0 * * *",
     "tag": "advanced"
   },
 {
