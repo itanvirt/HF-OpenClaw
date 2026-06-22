@@ -37,6 +37,11 @@ const startTime = Date.now();
 const LLM_MODEL = process.env.LLM_MODEL || "Not Set";
 const LLM_PROVIDER = LLM_MODEL.includes("/") ? LLM_MODEL.split("/")[0] : "";
 const TELEGRAM_WEBHOOK_URL = (process.env.TELEGRAM_WEBHOOK_URL || "").trim();
+// Set by start.sh only when TELEGRAM_MODE=webhook. TELEGRAM_WEBHOOK_PORT is OpenClaw's
+// local-only webhook listener (127.0.0.1) — we forward just this one public path to it
+// so the listener itself never needs to bind a public interface.
+const TELEGRAM_WEBHOOK_PATH = normalizeBase(process.env.TELEGRAM_WEBHOOK_PATH, "/telegram-webhook");
+const TELEGRAM_WEBHOOK_PORT = Number.parseInt(process.env.TELEGRAM_WEBHOOK_PORT || "0", 10);
 const TELEGRAM_CONFIGURED = !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_ALLOWED_USERS);
 const WHATSAPP_ENABLED = isTrue(process.env.WHATSAPP_ENABLED);
 const WHATSAPP_STATUS_FILE = "/tmp/openclaw-hf-wa-status.json";
@@ -752,6 +757,14 @@ const server = http.createServer(async (req, res) => {
     const gatewayReady = await probePort(GATEWAY_HOST, GATEWAY_PORT, "/health");
     res.writeHead(200, { "Content-Type": "application/json" });
     return res.end(JSON.stringify({ model: LLM_MODEL, uptime: formatUptime(Date.now() - startTime), gatewayReady, sync: getSyncStatus(), whatsapp: readGuardianStatus(), keepalive: getKeepaliveStatus() }));
+  }
+
+  // Telegram webhook ingress (only active when start.sh configured TELEGRAM_MODE=webhook).
+  // Forwarded straight to OpenClaw's local-only listener, bypassing the private-space
+  // guard/auth below — Telegram's POSTs aren't browser navigation, and OpenClaw itself
+  // validates the secret token header before processing the update.
+  if (TELEGRAM_WEBHOOK_PORT && pathname === TELEGRAM_WEBHOOK_PATH) {
+    return proxyHTTP(req, res, GATEWAY_HOST, TELEGRAM_WEBHOOK_PORT);
   }
 
   // Private space redirect — send users to the authenticated HF Spaces page.

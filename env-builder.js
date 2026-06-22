@@ -1735,6 +1735,42 @@ const FIELDS = [
     "tag": "critical"
   },
 {
+    "g": "Telegram",
+    "icon": "✈️",
+    "k": "TELEGRAM_MODE",
+    "lbl": "Update mode",
+    "type": "select",
+    "options": ["polling", "webhook"],
+    "ph": "polling",
+    "tag": "feature"
+  },
+{
+    "g": "Telegram",
+    "icon": "✈️",
+    "k": "TELEGRAM_WEBHOOK_URL",
+    "lbl": "Webhook URL override",
+    "type": "text",
+    "ph": "https://your-space.hf.space/telegram-webhook",
+    "tag": "advanced"
+  },
+{
+    "g": "Telegram",
+    "icon": "✈️",
+    "k": "TELEGRAM_WEBHOOK_PATH",
+    "lbl": "Webhook path",
+    "type": "text",
+    "ph": "/telegram-webhook",
+    "tag": "advanced"
+  },
+{
+    "g": "Telegram",
+    "icon": "✈️",
+    "k": "TELEGRAM_WEBHOOK_SECRET",
+    "lbl": "Webhook secret override",
+    "type": "password",
+    "tag": "advanced"
+  },
+{
     "g": "Deployment",
     "icon": "🧭",
     "k": "APP_BASE",

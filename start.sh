@@ -722,6 +722,19 @@ resolve_telegram_api_root() {
 }
 TELEGRAM_API_ROOT="$(resolve_telegram_api_root)"
 
+# Webhook mode (optional — default is long polling, which generates no inbound
+# traffic to the Space). Set TELEGRAM_MODE=webhook to have Telegram POST updates
+# directly to the Space instead; OpenClaw registers/unregisters the webhook with
+# Telegram itself based on whether channels.telegram.webhookUrl is set.
+TELEGRAM_MODE="$(trim_var "${TELEGRAM_MODE:-}")"
+TELEGRAM_MODE="${TELEGRAM_MODE:-polling}"
+case "$TELEGRAM_MODE" in
+  webhook|polling) ;;
+  *)
+    echo "Warning: invalid TELEGRAM_MODE '$TELEGRAM_MODE' (expected 'polling' or 'webhook'); using polling." >&2
+    TELEGRAM_MODE="polling"
+    ;;
+esac
 
 # Telegram (supports multiple user IDs, comma-separated)
 if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
@@ -729,12 +742,12 @@ if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
   # Trim spaces and ensure it is exported for the plugin
   CLEAN_TG_TOKEN=$(echo "$TELEGRAM_BOT_TOKEN" | tr -d '[:space:]')
   export TELEGRAM_BOT_TOKEN="$CLEAN_TG_TOKEN"
-  
+
   export OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1
   export OPENCLAW_TELEGRAM_DNS_RESULT_ORDER=ipv4first
   # Force ipv4 for Telegram specifically as HF IPv6 often times out
   export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--dns-result-order=ipv4first"
-  
+
   CONFIG_JSON=$(echo "$CONFIG_JSON" | jq --arg token "$CLEAN_TG_TOKEN" --arg proxy_url "$TELEGRAM_API_ROOT" '
     .channels.telegram.enabled = true
     | .channels.telegram.botToken = $token
@@ -748,7 +761,47 @@ if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
         "jitter": 0.2
       }
   ')
-  
+
+  TELEGRAM_WEBHOOK_PATH="$(trim_var "${TELEGRAM_WEBHOOK_PATH:-}")"
+  TELEGRAM_WEBHOOK_PATH="${TELEGRAM_WEBHOOK_PATH:-/telegram-webhook}"
+  case "$TELEGRAM_WEBHOOK_PATH" in
+    /*) ;;
+    *) TELEGRAM_WEBHOOK_PATH="/$TELEGRAM_WEBHOOK_PATH" ;;
+  esac
+  TELEGRAM_WEBHOOK_PORT="$(trim_var "${TELEGRAM_WEBHOOK_PORT:-}")"
+  TELEGRAM_WEBHOOK_PORT="${TELEGRAM_WEBHOOK_PORT:-8787}"
+  TELEGRAM_WEBHOOK_URL="$(trim_var "${TELEGRAM_WEBHOOK_URL:-}")"
+
+  if [ "$TELEGRAM_MODE" = "webhook" ] && [ -z "$TELEGRAM_WEBHOOK_URL" ]; then
+    if [ -n "${SPACE_HOST:-}" ]; then
+      TELEGRAM_WEBHOOK_URL="https://${SPACE_HOST}${TELEGRAM_WEBHOOK_PATH}"
+    else
+      echo "Warning: TELEGRAM_MODE=webhook requires SPACE_HOST (set automatically on HF Spaces) or an explicit TELEGRAM_WEBHOOK_URL; falling back to long polling." >&2
+      TELEGRAM_MODE="polling"
+    fi
+  fi
+
+  if [ "$TELEGRAM_MODE" = "webhook" ]; then
+    TELEGRAM_WEBHOOK_SECRET="$(trim_var "${TELEGRAM_WEBHOOK_SECRET:-}")"
+    TELEGRAM_WEBHOOK_SECRET="${TELEGRAM_WEBHOOK_SECRET:-$(node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("hex"))')}"
+    # Exported so health-server.js (separate Node process) knows the public path
+    # to forward to OpenClaw's local-only webhook listener, and so the dashboard
+    # displays "Webhook" instead of "Polling".
+    export TELEGRAM_WEBHOOK_URL TELEGRAM_WEBHOOK_PATH TELEGRAM_WEBHOOK_PORT
+    CONFIG_JSON=$(echo "$CONFIG_JSON" | jq \
+      --arg url "$TELEGRAM_WEBHOOK_URL" \
+      --arg secret "$TELEGRAM_WEBHOOK_SECRET" \
+      --arg path "$TELEGRAM_WEBHOOK_PATH" \
+      --argjson port "$TELEGRAM_WEBHOOK_PORT" \
+      '.channels.telegram.webhookUrl = $url
+       | .channels.telegram.webhookSecret = $secret
+       | .channels.telegram.webhookPath = $path
+       | .channels.telegram.webhookPort = $port')
+    echo "Telegram: webhook mode -> ${TELEGRAM_WEBHOOK_URL}"
+  else
+    echo "Telegram: long-polling mode"
+  fi
+
   if [ -n "${TELEGRAM_ALLOWED_USERS:-}" ]; then
     # Convert comma-separated IDs to JSON array (already safe — jq -R parses).
     IDS_JSON=$(echo "$TELEGRAM_ALLOWED_USERS" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | jq -R . | jq -s .)
@@ -785,6 +838,10 @@ TELEGRAM_CONFIG_ENABLED=false
 if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
   TELEGRAM_CONFIG_ENABLED=true
 fi
+TELEGRAM_WEBHOOK_MODE_ACTIVE=false
+if [ "$TELEGRAM_CONFIG_ENABLED" = "true" ] && [ "$TELEGRAM_MODE" = "webhook" ]; then
+  TELEGRAM_WEBHOOK_MODE_ACTIVE=true
+fi
 if [ -f "$EXISTING_CONFIG" ]; then
   echo "Restored config found — patching required fields and runtime channel/plugin toggles..."
   PATCHED=$(jq \
@@ -800,6 +857,7 @@ if [ -f "$EXISTING_CONFIG" ]; then
     --argjson whatsappConfigured "$WHATSAPP_ENABLED_CONFIGURED" \
     --argjson whatsappEnabled "$WHATSAPP_CONFIG_ENABLED" \
     --argjson telegramConfigured "$TELEGRAM_CONFIG_ENABLED" \
+    --argjson telegramWebhookMode "$TELEGRAM_WEBHOOK_MODE_ACTIVE" \
     '(.channels.whatsapp // {}) as $existingWhatsapp
      | .gateway.auth.token = $token
      | .agents.defaults.model = $model
@@ -826,6 +884,9 @@ if [ -f "$EXISTING_CONFIG" ]; then
      | if $telegramConfigured then
          .channels.telegram = (($desired.channels.telegram // {}) * (.channels.telegram // {}))
          | .channels.telegram.botToken = $desired.channels.telegram.botToken
+         | if $telegramWebhookMode then . else
+             .channels.telegram |= del(.webhookUrl, .webhookSecret, .webhookPath, .webhookPort)
+           end
        else
          del(.channels.telegram)
          | .plugins.entries.telegram.enabled = false

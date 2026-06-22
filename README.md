@@ -126,7 +126,12 @@ To chat via Telegram:
 | :--- | :--- | :--- |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram bot token from BotFather |
 | `TELEGRAM_ALLOWED_USERS` | — | Comma-separated Telegram user IDs for access |
-| `TELEGRAM_WEBHOOK_URL` | *(auto-provisioned)* | Override webhook URL; set `TELEGRAM_MODE=polling` to use long-polling instead |
+| `TELEGRAM_MODE` | `polling` | Set to `webhook` to receive updates via your Space's public URL instead of long-polling |
+| `TELEGRAM_WEBHOOK_URL` | *(derived from `SPACE_HOST`)* | Override the public webhook URL (only used when `TELEGRAM_MODE=webhook`) |
+| `TELEGRAM_WEBHOOK_PATH` | `/telegram-webhook` | Path Telegram POSTs updates to (only used when `TELEGRAM_MODE=webhook`) |
+| `TELEGRAM_WEBHOOK_SECRET` | *(auto-generated)* | Secret token Telegram includes on each request; OpenClaw validates it before processing |
+
+By default Telegram uses **long polling** — OpenClaw pulls updates itself, which generates no inbound traffic to your Space. Setting `TELEGRAM_MODE=webhook` switches OpenClaw to register a webhook with Telegram instead: Telegram POSTs updates directly to `https://<your-space>.hf.space/telegram-webhook` (or your `TELEGRAM_WEBHOOK_URL` override), and `health-server.js` forwards just that path to OpenClaw's webhook listener, which stays bound to `127.0.0.1` internally. Inbound webhook traffic counts as Space activity and resets HF's sleep timer — regular bot usage alone can then help keep a free-tier Space awake (see [Staying Alive](#-staying-alive-recommended-on-free-hf-spaces)).
 
 ## 🌐 Cloudflare Proxy Setup
 
@@ -223,6 +228,8 @@ Advanced/backward-compatible variables still work if you prefer package-specific
 ## 💓 Staying Alive *(Recommended on Free HF Spaces)*
 
 Your Space will automatically be kept awake by a background Cloudflare Worker when you configure the `CLOUDFLARE_WORKERS_TOKEN` secret. The worker uses a cron trigger to regularly ping your Space's `/health` endpoint. The dashboard displays the current keep-alive worker status.
+
+Alternatively (or in addition), setting `TELEGRAM_MODE=webhook` (see [Telegram Setup](#-telegram-setup-optional)) makes regular bot usage itself generate inbound traffic, which also resets HF's sleep timer — without needing an external pinger.
 
 ## 🔔 Webhooks *(Optional)*
 
