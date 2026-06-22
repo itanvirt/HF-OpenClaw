@@ -152,7 +152,12 @@ def resolve_account_and_subdomain(api_token: str) -> tuple[str, str]:
 
 
 def setup_keepalive_worker(api_token: str, account_id: str, subdomain: str) -> None:
-    enabled = os.environ.get("CLOUDFLARE_KEEPALIVE_ENABLED", "true").strip().lower()
+    # Defaults to disabled: pinging your own Space from the outside to defeat HF's
+    # sleep timer can be read as working around platform restrictions, which risks
+    # violating Hugging Face's Terms of Service. Set CLOUDFLARE_KEEPALIVE_ENABLED=true
+    # to opt in anyway, at your own risk. TELEGRAM_MODE=webhook keeps a Space awake
+    # via genuine inbound bot traffic instead, with no such risk.
+    enabled = os.environ.get("CLOUDFLARE_KEEPALIVE_ENABLED", "false").strip().lower()
     if enabled in {"0", "false", "no", "off"}:
         write_keepalive_status({"configured": False, "status": "disabled", "message": "Cloudflare keep-awake is disabled."})
         return

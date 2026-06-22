@@ -722,12 +722,14 @@ resolve_telegram_api_root() {
 }
 TELEGRAM_API_ROOT="$(resolve_telegram_api_root)"
 
-# Webhook mode (optional — default is long polling, which generates no inbound
-# traffic to the Space). Set TELEGRAM_MODE=webhook to have Telegram POST updates
-# directly to the Space instead; OpenClaw registers/unregisters the webhook with
-# Telegram itself based on whether channels.telegram.webhookUrl is set.
+# Webhook mode (default — Telegram POSTs updates straight to the Space, which
+# also counts as inbound traffic and helps keep a free-tier Space awake). Set
+# TELEGRAM_MODE=polling to fall back to long polling instead; OpenClaw
+# registers/unregisters the webhook with Telegram itself based on whether
+# channels.telegram.webhookUrl is set. Webhook mode auto-falls back to polling
+# below if no SPACE_HOST/TELEGRAM_WEBHOOK_URL is available.
 TELEGRAM_MODE="$(trim_var "${TELEGRAM_MODE:-}")"
-TELEGRAM_MODE="${TELEGRAM_MODE:-polling}"
+TELEGRAM_MODE="${TELEGRAM_MODE:-webhook}"
 case "$TELEGRAM_MODE" in
   webhook|polling) ;;
   *)

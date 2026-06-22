@@ -784,9 +784,9 @@ const FIELDS = [
     "g": "Cloudflare",
     "icon": "⚡",
     "k": "CLOUDFLARE_KEEPALIVE_ENABLED",
-    "lbl": "Enable keep-awake worker",
+    "lbl": "Enable keep-awake worker (ToS risk — see README)",
     "type": "toggle",
-    "ph": "true",
+    "ph": "false",
     "tag": "feature"
   },
 {
@@ -1738,10 +1738,10 @@ const FIELDS = [
     "g": "Telegram",
     "icon": "✈️",
     "k": "TELEGRAM_MODE",
-    "lbl": "Update mode",
+    "lbl": "Update mode (webhook also keeps Space awake)",
     "type": "select",
-    "options": ["polling", "webhook"],
-    "ph": "polling",
+    "options": ["webhook", "polling"],
+    "ph": "webhook",
     "tag": "feature"
   },
 {

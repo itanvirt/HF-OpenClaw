@@ -92,6 +92,9 @@ Navigate to your new Space's **Settings**, scroll down to the **Variables and se
 > [!TIP]
 > OpenClaw is completely flexible! You only need these three secrets to get started. The rest (Telegram, Cloudflare, HF backup) are optional and can be added later.
 
+> [!NOTE]
+> `TELEGRAM_MODE` defaults to `webhook` and `CLOUDFLARE_KEEPALIVE_ENABLED` defaults to `false` out of the box — no Variables needed for these. If you maintain your own template Space and want duplicators to see these explicitly pre-filled in **Settings → Variables and secrets**, add `TELEGRAM_MODE=webhook` and `CLOUDFLARE_KEEPALIVE_ENABLED=false` as Variables there yourself: Hugging Face copies a Space's current Variables (and Secret *names*, not values) into every duplicate. See [Staying Alive](#-staying-alive-recommended-on-free-hf-spaces) for why `CLOUDFLARE_KEEPALIVE_ENABLED` defaults to off.
+
 **Terminal auto-enables when `GATEWAY_TOKEN` is set** — no extra secrets needed. The terminal is protected by the same dashboard session login as the Control UI. To disable the terminal entirely, set `DEV_MODE=false` as a Variable.
 
 The Dockerfile tracks the latest upstream OpenClaw release by default. If you want to pin a specific version instead, add `OPENCLAW_VERSION` under **Variables** in your Space settings. For Docker Spaces, HF passes Variables as build args during image build, so these should be Variables, not Secrets (except tokens).
@@ -126,12 +129,12 @@ To chat via Telegram:
 | :--- | :--- | :--- |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram bot token from BotFather |
 | `TELEGRAM_ALLOWED_USERS` | — | Comma-separated Telegram user IDs for access |
-| `TELEGRAM_MODE` | `polling` | Set to `webhook` to receive updates via your Space's public URL instead of long-polling |
+| `TELEGRAM_MODE` | `webhook` | Set to `polling` to have OpenClaw long-poll Telegram instead of receiving updates via your Space's public URL |
 | `TELEGRAM_WEBHOOK_URL` | *(derived from `SPACE_HOST`)* | Override the public webhook URL (only used when `TELEGRAM_MODE=webhook`) |
 | `TELEGRAM_WEBHOOK_PATH` | `/telegram-webhook` | Path Telegram POSTs updates to (only used when `TELEGRAM_MODE=webhook`) |
 | `TELEGRAM_WEBHOOK_SECRET` | *(auto-generated)* | Secret token Telegram includes on each request; OpenClaw validates it before processing |
 
-By default Telegram uses **long polling** — OpenClaw pulls updates itself, which generates no inbound traffic to your Space. Setting `TELEGRAM_MODE=webhook` switches OpenClaw to register a webhook with Telegram instead: Telegram POSTs updates directly to `https://<your-space>.hf.space/telegram-webhook` (or your `TELEGRAM_WEBHOOK_URL` override), and `health-server.js` forwards just that path to OpenClaw's webhook listener, which stays bound to `127.0.0.1` internally. Inbound webhook traffic counts as Space activity and resets HF's sleep timer — regular bot usage alone can then help keep a free-tier Space awake (see [Staying Alive](#-staying-alive-recommended-on-free-hf-spaces)).
+`TELEGRAM_MODE` defaults to **webhook**: OpenClaw registers a webhook with Telegram, which POSTs updates directly to `https://<your-space>.hf.space/telegram-webhook` (or your `TELEGRAM_WEBHOOK_URL` override), and `health-server.js` forwards just that path to OpenClaw's webhook listener, which stays bound to `127.0.0.1` internally. Inbound webhook traffic counts as Space activity and resets HF's sleep timer, so regular bot usage alone helps keep a free-tier Space awake — with no ToS risk (see [Staying Alive](#-staying-alive-recommended-on-free-hf-spaces)). If `SPACE_HOST`/`TELEGRAM_WEBHOOK_URL` can't be determined, OpenClaw automatically falls back to long polling, which generates no inbound traffic to your Space. Set `TELEGRAM_MODE=polling` explicitly if you prefer that behavior.
 
 ## 🌐 Cloudflare Proxy Setup
 
@@ -227,9 +230,13 @@ Advanced/backward-compatible variables still work if you prefer package-specific
 
 ## 💓 Staying Alive *(Recommended on Free HF Spaces)*
 
-Your Space will automatically be kept awake by a background Cloudflare Worker when you configure the `CLOUDFLARE_WORKERS_TOKEN` secret. The worker uses a cron trigger to regularly ping your Space's `/health` endpoint. The dashboard displays the current keep-alive worker status.
+**Recommended: use the bot.** With `TELEGRAM_MODE=webhook` (the default — see [Telegram Setup](#-telegram-setup-optional)), Telegram POSTs updates straight to your Space, and that inbound traffic resets HF's sleep timer on its own. As long as the bot gets used periodically, the Space stays awake with zero extra setup and no ToS exposure.
 
-Alternatively (or in addition), setting `TELEGRAM_MODE=webhook` (see [Telegram Setup](#-telegram-setup-optional)) makes regular bot usage itself generate inbound traffic, which also resets HF's sleep timer — without needing an external pinger.
+**Optional, riskier: external keep-alive ping.** If you configure the `CLOUDFLARE_WORKERS_TOKEN` secret, OpenClaw can also deploy a background Cloudflare Worker that pings your Space's `/health` endpoint on a cron trigger. This is gated behind `CLOUDFLARE_KEEPALIVE_ENABLED`, which **defaults to `false`**.
+
+> ⚠️ **ToS note:** Setting `CLOUDFLARE_KEEPALIVE_ENABLED=true` makes an external service repeatedly ping your Space purely to defeat HF's sleep timer. Hugging Face's Content Policy prohibits using platform resources to circumvent restrictions like the free-tier sleep behavior, so this carries a real risk of your Space (or account) being flagged or suspended. You *can* turn it on, but it's at your own risk under Hugging Face's Terms of Service — webhook-mode Telegram traffic is the safer way to keep a Space alive, since it's genuine usage rather than an artificial ping.
+
+The dashboard displays the current keep-alive worker status either way.
 
 ## 🔔 Webhooks *(Optional)*
 
@@ -248,7 +255,7 @@ Configure password access and network restrictions:
 | `OPENCLAW_PASSWORD` | — | Enable simple password auth instead of token (applies only when `GATEWAY_TOKEN` is empty) |
 | `TRUSTED_PROXIES` | — | Comma-separated IPs of HF proxies |
 | `ALLOWED_ORIGINS` | — | Comma-separated allowed origins for Control UI |
-| `CLOUDFLARE_KEEPALIVE_ENABLED` | `true` | Set to `false` to disable the automatic Cloudflare KeepAlive worker |
+| `CLOUDFLARE_KEEPALIVE_ENABLED` | `false` | Set to `true` to enable the external Cloudflare keep-alive ping — at your own risk, see [Staying Alive](#-staying-alive-recommended-on-free-hf-spaces) |
 
 ## 🔑 API Key Rotation *(Optional)*
 
