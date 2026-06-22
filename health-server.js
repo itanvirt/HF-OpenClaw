@@ -4,8 +4,6 @@ const https = require("https");
 const fs = require("fs");
 const net = require("net");
 const crypto = require("crypto");
-const pty = require("node-pty");
-const { WebSocketServer } = require("ws");
 
 function isTrue(value) {
   return /^(true|1|yes|on)$/i.test(String(value || "").trim());
@@ -21,7 +19,7 @@ const PORT = Number.parseInt(process.env.PORT || "7861", 10);
 const GATEWAY_PORT = Number.parseInt(process.env.GATEWAY_PORT || "7860", 10);
 const GATEWAY_HOST = "127.0.0.1";
 const TERMINAL_BASE = normalizeBase(process.env.TERMINAL_BASE, "/terminal");
-const TERMINAL_WS_PATH = `${TERMINAL_BASE}/ws`;
+const JUPYTER_PORT = Number.parseInt(process.env.JUPYTER_PORT || "8888", 10);
 const GATEWAY_TOKEN = (process.env.GATEWAY_TOKEN || "").trim();
 const SESSION_COOKIE = "hc_session";
 const LOGIN_PATH = "/login";
@@ -647,53 +645,6 @@ function renderEnvBuilder() {
   }
 }
 
-function renderTerminalPage() {
-  try {
-    return fs.readFileSync(require("path").join(__dirname, "terminal.html"), "utf8")
-      .replace(/\{\{\s*ws_path\s*\}\}/g, TERMINAL_WS_PATH);
-  } catch (exc) {
-    return `<!doctype html><title>Terminal unavailable</title><pre>${escapeHtml(exc.message)}</pre>`;
-  }
-}
-
-// ── Browser terminal PTY bridge ──
-// Wires an authenticated WebSocket connection to a real shell via node-pty.
-// Wire protocol matches terminal.html: a leading "\x01RESIZE:{rows},{cols}"
-// control message, otherwise raw bytes passed straight through to the PTY.
-const wss = new WebSocketServer({ noServer: true });
-
-function attachPtyBridge(ws) {
-  const shell = process.env.SHELL || "/bin/bash";
-  const term = pty.spawn(shell, [], {
-    name: "xterm-256color",
-    cols: 80,
-    rows: 24,
-    cwd: process.env.HOME || "/home/node",
-    env: process.env,
-  });
-
-  term.onData((data) => {
-    if (ws.readyState === ws.OPEN) ws.send(data);
-  });
-  term.onExit(() => {
-    try { ws.close(); } catch {}
-  });
-
-  ws.on("message", (data, isBinary) => {
-    const text = isBinary ? null : data.toString("utf8");
-    if (text && text.startsWith("\x01RESIZE:")) {
-      const m = /^\x01RESIZE:(\d+),(\d+)$/.exec(text);
-      if (m) {
-        try { term.resize(Number(m[2]), Number(m[1])); } catch {}
-      }
-      return;
-    }
-    term.write(isBinary ? data : text);
-  });
-  ws.on("close", () => { try { term.kill(); } catch {} });
-  ws.on("error", () => { try { term.kill(); } catch {} });
-}
-
 // ── Generic proxy ──
 function proxiedPath(url, { stripPrefix = "" } = {}) {
   if (!stripPrefix) return url.pathname + url.search;
@@ -933,8 +884,8 @@ const server = http.createServer(async (req, res) => {
     }));
   }
 
-  // Browser terminal (xterm.js + node-pty, served in-process — see attachPtyBridge)
-  if (pathname === TERMINAL_BASE || pathname === TERMINAL_BASE + "/") {
+  // Browser terminal (JupyterLab, reverse-proxied — see start_jupyter_once in start.sh)
+  if (pathname === TERMINAL_BASE || pathname.startsWith(TERMINAL_BASE + "/")) {
     if (!TERMINAL_ENABLED) {
       res.writeHead(404, { "Content-Type": "application/json" });
       return res.end(JSON.stringify({ status: "disabled", message: "Terminal is disabled. Set DEV_MODE=true or OPENCLAW_HF_TERMINAL_ENABLED=true to enable." }));
@@ -944,8 +895,13 @@ const server = http.createServer(async (req, res) => {
       return res.end(renderPrivateRedirect(HF_SPACE_URL));
     }
     if (!requireAuth(req, res)) return;
-    res.writeHead(200, { "Content-Type": "text/html" });
-    return res.end(renderTerminalPage());
+    const jToken = (process.env.JUPYTER_TOKEN || "").trim() || GATEWAY_TOKEN;
+    return proxyHTTP(req, res, GATEWAY_HOST, JUPYTER_PORT, {
+      publicPrefix: TERMINAL_BASE,
+      stripPrefix: "",
+      retryWithoutPrefixOn404: false,
+      extraHeaders: jToken ? { authorization: `token ${jToken}` } : {},
+    });
   }
 
   // OpenClaw Control UI mounted under /app. Retry without the mount prefix on
@@ -989,24 +945,21 @@ const server = http.createServer(async (req, res) => {
   proxyHTTP(req, res, GATEWAY_HOST, GATEWAY_PORT);
 });
 
-// ── WebSocket upgrade (browser terminal PTY + gateway app need this) ──
+// ── WebSocket upgrade (browser terminal + gateway app need this) ──
 server.on("upgrade", (req, socket, head) => {
   const { pathname, search } = parseRequestUrl(req.url);
 
-  if (TERMINAL_ENABLED && pathname === TERMINAL_WS_PATH) {
-    if (!isAuthorized(req)) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-    wss.handleUpgrade(req, socket, head, (ws) => attachPtyBridge(ws));
+  const isTerminal = TERMINAL_ENABLED && (pathname === TERMINAL_BASE || pathname.startsWith(TERMINAL_BASE + "/"));
+  if (isTerminal && !isAuthorized(req)) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    socket.destroy();
     return;
   }
 
   const isApp = pathname === APP_BASE || pathname.startsWith(APP_BASE + "/");
   const targetHost = GATEWAY_HOST;
-  const targetPort = GATEWAY_PORT;
-  const publicPrefix = isApp ? APP_BASE : "";
+  const targetPort = isTerminal ? JUPYTER_PORT : GATEWAY_PORT;
+  const publicPrefix = isTerminal ? TERMINAL_BASE : isApp ? APP_BASE : "";
   const targetPath = pathname + search;
 
   const ps = net.connect(targetPort, targetHost, () => {

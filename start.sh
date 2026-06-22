@@ -881,6 +881,13 @@ else
 fi
 export OPENCLAW_HF_TERMINAL_ENABLED="$RUNTIME_TERMINAL_ENABLED"
 
+JUPYTER_PORT="${JUPYTER_PORT:-8888}"
+export JUPYTER_PORT
+if [ "$RUNTIME_TERMINAL_ENABLED" = "true" ]; then
+  JUPYTER_TOKEN="${JUPYTER_TOKEN:-$GATEWAY_TOKEN}"
+  export JUPYTER_TOKEN
+fi
+
 if [ -n "${SPACE_HOST:-}" ]; then
   if [ "$RUNTIME_TERMINAL_ENABLED" = "true" ]; then
     echo "Routes    : /app/ (Control UI), ${TERMINAL_BASE}/ (Terminal)"
@@ -975,10 +982,49 @@ export HUGGINGFACE_HUB_TOKEN="${HUGGINGFACE_HUB_TOKEN:-${HF_TOKEN:-}}"
 node /home/node/app/health-server.js &
 HEALTH_PID=$!
 
+# 10.5 Start JupyterLab — backs the browser terminal at ${TERMINAL_BASE}/,
+# reverse-proxied by health-server.js. Skipped entirely when the terminal
+# is disabled.
+JUPYTER_PID=""
+start_jupyter_once() {
+  [ "$RUNTIME_TERMINAL_ENABLED" = "true" ] || return 0
+  if [ -n "${JUPYTER_PID:-}" ] && kill -0 "$JUPYTER_PID" 2>/dev/null; then
+    return 0
+  fi
+  if [ -z "${JUPYTER_TOKEN:-}" ]; then
+    echo "Terminal  : disabled (no GATEWAY_TOKEN/JUPYTER_TOKEN to authenticate it)"
+    return 1
+  fi
+  JUPYTER_ROOT_DIR="${JUPYTER_ROOT_DIR:-/home/node}"
+  mkdir -p "$JUPYTER_ROOT_DIR/.jupyter"
+  echo "Terminal  : starting JupyterLab (root: $JUPYTER_ROOT_DIR)"
+  PYTHONPATH="" python3 -m jupyterlab \
+    --ip 127.0.0.1 \
+    --port "$JUPYTER_PORT" \
+    --no-browser \
+    --IdentityProvider.token="$JUPYTER_TOKEN" \
+    --ServerApp.base_url="${TERMINAL_BASE}/" \
+    --ServerApp.terminals_enabled=True \
+    --ServerApp.allow_origin='*' \
+    --ServerApp.allow_remote_access=True \
+    --ServerApp.trust_xheaders=True \
+    --ServerApp.tornado_settings="{'headers': {'Content-Security-Policy': 'frame-ancestors *'}}" \
+    --IdentityProvider.cookie_options="{'SameSite': 'None', 'Secure': True}" \
+    --ServerApp.disable_check_xsrf=True \
+    --LabApp.news_url=None \
+    --LabApp.check_for_updates_class=jupyterlab.NeverCheckForUpdate \
+    --ServerApp.log_level=WARN \
+    --ServerApp.root_dir="$JUPYTER_ROOT_DIR" \
+    >> /tmp/jupyterlab.log 2>&1 &
+  JUPYTER_PID=$!
+  echo "Terminal  : started (PID: $JUPYTER_PID)"
+}
+start_jupyter_once
+
 # DevData restore — runs before the background sync loop starts so the
 # terminal's $HOME has prior session state (dotfiles, workspace files) as
-# soon as a user connects. The browser terminal's shells are spawned
-# per-connection by health-server.js, so there is no separate process whose
+# soon as a user connects. The browser terminal (JupyterLab) reads its
+# $HOME directly off disk per-session, so there is no separate process whose
 # runtime state restore could race with or corrupt.
 if [ "$RUNTIME_TERMINAL_ENABLED" = "true" ] && \
    [ "$DEVDATA_ENABLED" = "true" ] && \
@@ -1605,6 +1651,12 @@ while true; do
     node /home/node/app/health-server.js &
     HEALTH_PID=$!
     echo "Health server restarted (PID: $HEALTH_PID)"
+  fi
+
+  if [ "$RUNTIME_TERMINAL_ENABLED" = "true" ] && [ -n "${JUPYTER_PID:-}" ] && ! kill -0 "$JUPYTER_PID" 2>/dev/null; then
+    echo "Warning: JupyterLab exited; restarting..."
+    JUPYTER_PID=""
+    start_jupyter_once
   fi
 
   if [ "${AUTO_DOCTOR:-false}" = "true" ]; then

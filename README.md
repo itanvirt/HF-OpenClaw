@@ -94,7 +94,7 @@ Navigate to your new Space's **Settings**, scroll down to the **Variables and se
 
 **Terminal auto-enables when `GATEWAY_TOKEN` is set** — no extra secrets needed. The terminal is protected by the same dashboard session login as the Control UI. To disable the terminal entirely, set `DEV_MODE=false` as a Variable.
 
-The Dockerfile defaults `OPENCLAW_VERSION` to a known-good pinned release, so duplicated Spaces are stable out of the box with no extra config. If you want to track a different (e.g. newer) OpenClaw release, add `OPENCLAW_VERSION` under **Variables** in your Space settings. For Docker Spaces, HF passes Variables as build args during image build, so these should be Variables, not Secrets (except tokens).
+The Dockerfile tracks the latest upstream OpenClaw release by default. If you want to pin a specific version instead, add `OPENCLAW_VERSION` under **Variables** in your Space settings. For Docker Spaces, HF passes Variables as build args during image build, so these should be Variables, not Secrets (except tokens).
 
 ### Step 3: Deploy & Run
 
@@ -357,15 +357,15 @@ openclaw channels login --gateway https://YOUR_SPACE_NAME.hf.space
 
 ## 💻 Browser Terminal
 
-The Space includes a browser-based terminal (xterm.js + node-pty) running in the same process as the dashboard:
+The Space includes a browser-based terminal, backed by JupyterLab and reverse-proxied through the dashboard process:
 
 | Path | Service | Notes |
 | :--- | :--- | :--- |
 | `/` | OpenClaw dashboard | Public HF Spaces entrypoint |
 | `/app/` | OpenClaw Control UI (native) | Mounted behind the local reverse proxy |
-| `/terminal/` | Browser terminal | Auto-enabled when `GATEWAY_TOKEN` is set; protected by the same dashboard session login as the Control UI. Set `DEV_MODE=false` to disable. |
+| `/terminal/` | Browser terminal (JupyterLab) | Auto-enabled when `GATEWAY_TOKEN` is set; protected by the same dashboard session login as the Control UI. Set `DEV_MODE=false` to disable. |
 
-When enabled, each terminal connection spawns a fresh shell rooted at `$HOME` (`/home/node`).
+When enabled, JupyterLab runs rooted at `$HOME` (`/home/node`), giving you a terminal plus a file browser and notebooks.
 
 > [!IMPORTANT]
 > No extra secret needed — the terminal reuses the dashboard's session login, so anyone who can authenticate to the dashboard can open a shell.
@@ -379,7 +379,7 @@ OpenClaw uses a multi-layered approach to ensure stability and persistence on Hu
 
 - **Dashboard (`/`)**: Landing page with status, monitoring, and keep-alive tools. Terminal button appears when DEV mode is enabled (default when `GATEWAY_TOKEN` is set).
 - **Control UI (`/app/`)**: Native OpenClaw interface for managing agents and channels, proxied to the OpenClaw gateway on internal port `7860`.
-- **Browser Terminal (`/terminal/`)**: xterm.js + node-pty terminal served from the same process as the dashboard (auto-enabled when `GATEWAY_TOKEN` is set; set `DEV_MODE=false` to disable).
+- **Browser Terminal (`/terminal/`)**: JupyterLab, reverse-proxied by the dashboard process (auto-enabled when `GATEWAY_TOKEN` is set; set `DEV_MODE=false` to disable).
 - **Health Check (`/health`)**: Endpoint for uptime monitoring and readiness probes.
 - **Sync Engine**: Python background process managing HF Dataset persistence.
 - **Transparent Proxy**: Interceptor for requests to blocked domains (Telegram, etc.).
@@ -407,7 +407,7 @@ OpenClaw uses a multi-layered approach to ensure stability and persistence on Hu
 - **Control UI says too many failed authentication attempts:** Wait for the retry window to expire, then open the Space in an incognito window or clear site storage for your Space before logging in again with `GATEWAY_TOKEN`.
 - **WhatsApp lost its session after restart:** Make sure `HF_TOKEN` is configured so the hidden session backup can be restored on boot.
 - **UI blocked (CORS):** Set `ALLOWED_ORIGINS=https://your-space-name.hf.space`.
-- **Version mismatches:** The Dockerfile already pins a known-good default, but if you've overridden it, set the `OPENCLAW_VERSION` Variable in HF Spaces (or `--build-arg OPENCLAW_VERSION=...` locally) back to a working release and rebuild (Factory reboot).
+- **Version mismatches:** The Dockerfile tracks `latest` by default. If a new OpenClaw release regresses, pin a known-good version with the `OPENCLAW_VERSION` Variable in HF Spaces (or `--build-arg OPENCLAW_VERSION=...` locally) and rebuild (Factory reboot).
 
 ## 📚 Links
 

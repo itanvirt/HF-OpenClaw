@@ -4,26 +4,24 @@
 # Port 7861 (exposed): Dashboard + reverse proxy
 #   /          → OpenClaw dashboard
 #   /app/      → OpenClaw gateway (internal :7860)
-#   /terminal/ → xterm.js + node-pty browser terminal (same process)
+#   /terminal/ → JupyterLab browser terminal (reverse-proxied, separate process)
 # ════════════════════════════════════════════════════════════════
 
 # ── Stage 1: Pull pre-built OpenClaw ──
-# Pinned (not "latest") so duplicated Spaces get a known-good build with zero
-# manual config. Override with an HF Space Variable named OPENCLAW_VERSION
-# (or --build-arg locally) to track a newer release.
-ARG OPENCLAW_VERSION=2026.6.8
+# Tracks the latest upstream release. Pin with an HF Space Variable named
+# OPENCLAW_VERSION (or --build-arg locally) if you need a specific version.
+ARG OPENCLAW_VERSION=latest
 FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION} AS openclaw
 
 # ── Stage 2: Runtime ──
 FROM node:22-slim
-ARG OPENCLAW_VERSION=2026.6.8
+ARG OPENCLAW_VERSION=latest
 # DEV_MODE is a runtime-only HF Space Variable (read by start.sh) — it has no
-# effect at build time since node-pty/ws are always installed below. It
+# effect at build time since JupyterLab is always installed below. It
 # defaults to unset so start.sh can auto-enable the terminal when
 # GATEWAY_TOKEN is present; users can set DEV_MODE=false to opt out.
 
-# Install system dependencies (build-essential is required to compile the
-# node-pty native addon used by the browser terminal)
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     sudo \
@@ -33,7 +31,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     dbus \
     dbus-x11 \
-    build-essential \
     python3 \
     python3-pip \
     chromium \
@@ -58,7 +55,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-wqy-zenhei \
     xfonts-scalable \
     --no-install-recommends && \
-    pip3 install --no-cache-dir --break-system-packages huggingface_hub hf_transfer && \
+    pip3 install --no-cache-dir --break-system-packages huggingface_hub hf_transfer jupyterlab==4.5.7 tornado==6.5.5 ipywidgets==8.1.8 && \
     rm -rf /var/lib/apt/lists/*
 
 # Reuse existing node user (UID 1000). Allow passwordless package-manager
@@ -75,12 +72,11 @@ RUN mkdir -p /home/node/app /home/node/.openclaw && \
 # Copy pre-built OpenClaw (skips npm install entirely — much faster!)
 COPY --from=openclaw --chown=1000:1000 /app /home/node/.openclaw/openclaw-app
 
-# Add Playwright + the browser terminal's PTY/WebSocket deps in an isolated
-# sidecar node_modules (node-pty needs build-essential, installed above)
+# Add Playwright in an isolated sidecar node_modules
 RUN mkdir -p /home/node/browser-deps && \
     cd /home/node/browser-deps && \
     npm init -y && \
-    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --omit=dev playwright@1.59.1 node-pty@1.0.0 ws@8.18.0
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --omit=dev playwright@1.59.1
 
 # Symlink openclaw CLI so it's available globally
 RUN ln -s /home/node/.openclaw/openclaw-app/openclaw.mjs /usr/local/bin/openclaw 2>/dev/null || \
@@ -91,7 +87,6 @@ COPY --chown=1000:1000 cloudflare-proxy.js /opt/cloudflare-proxy.js
 COPY --chown=1000:1000 cloudflare-proxy-setup.py /home/node/app/cloudflare-proxy-setup.py
 COPY --chown=1000:1000 health-server.js /home/node/app/health-server.js
 COPY --chown=1000:1000 static/ /home/node/app/static/
-COPY --chown=1000:1000 terminal.html /home/node/app/terminal.html
 COPY --chown=1000:1000 iframe-fix.cjs /home/node/app/iframe-fix.cjs
 COPY --chown=1000:1000 start.sh /home/node/app/start.sh
 COPY --chown=1000:1000 wa-guardian.js /home/node/app/wa-guardian.js
