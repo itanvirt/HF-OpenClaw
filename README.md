@@ -132,6 +132,8 @@ To chat via Telegram:
 
 Hugging Face's free tier often restricts outbound connections to services like Telegram, Discord, and WhatsApp. OpenClaw solves this with a **Transparent Outbound Proxy** via Cloudflare Workers.
 
+> ⚠️ **ToS note:** This proxy is opt-in (it only activates if you set `CLOUDFLARE_WORKERS_TOKEN`) and only routes specific allowlisted third-party APIs — never Hugging Face or AI-provider traffic. Hugging Face's Content Policy prohibits using proxies/tunnels to bypass platform restrictions, and routing around an outbound network block could be read as falling under that policy even though this isn't targeting HF's own service. Enabling it is at your own risk under Hugging Face's Terms of Service.
+
 ### ⚡ Automatic Setup (Recommended)
 
 This is the easiest way — OpenClaw handles the deployment for you.
