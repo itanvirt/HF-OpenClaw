@@ -94,7 +94,7 @@ Navigate to your new Space's **Settings**, scroll down to the **Variables and se
 
 **Terminal auto-enables when `GATEWAY_TOKEN` is set** — no extra secrets needed. The terminal is protected by the same dashboard session login as the Control UI. To disable the terminal entirely, set `DEV_MODE=false` as a Variable.
 
-If you want to pin a specific OpenClaw release instead of `latest`, add `OPENCLAW_VERSION` under **Variables** in your Space settings. For Docker Spaces, HF passes Variables as build args during image build, so these should be Variables, not Secrets (except tokens).
+The Dockerfile defaults `OPENCLAW_VERSION` to a known-good pinned release, so duplicated Spaces are stable out of the box with no extra config. If you want to track a different (e.g. newer) OpenClaw release, add `OPENCLAW_VERSION` under **Variables** in your Space settings. For Docker Spaces, HF passes Variables as build args during image build, so these should be Variables, not Secrets (except tokens).
 
 ### Step 3: Deploy & Run
 
@@ -407,7 +407,7 @@ OpenClaw uses a multi-layered approach to ensure stability and persistence on Hu
 - **Control UI says too many failed authentication attempts:** Wait for the retry window to expire, then open the Space in an incognito window or clear site storage for your Space before logging in again with `GATEWAY_TOKEN`.
 - **WhatsApp lost its session after restart:** Make sure `HF_TOKEN` is configured so the hidden session backup can be restored on boot.
 - **UI blocked (CORS):** Set `ALLOWED_ORIGINS=https://your-space-name.hf.space`.
-- **Version mismatches:** Pin a specific OpenClaw build with the `OPENCLAW_VERSION` Variable in HF Spaces, or `--build-arg OPENCLAW_VERSION=...` locally.
+- **Version mismatches:** The Dockerfile already pins a known-good default, but if you've overridden it, set the `OPENCLAW_VERSION` Variable in HF Spaces (or `--build-arg OPENCLAW_VERSION=...` locally) back to a working release and rebuild (Factory reboot).
 
 ## 📚 Links
 

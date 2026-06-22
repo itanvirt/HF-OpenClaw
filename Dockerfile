@@ -8,12 +8,15 @@
 # ════════════════════════════════════════════════════════════════
 
 # ── Stage 1: Pull pre-built OpenClaw ──
-ARG OPENCLAW_VERSION=latest
+# Pinned (not "latest") so duplicated Spaces get a known-good build with zero
+# manual config. Override with an HF Space Variable named OPENCLAW_VERSION
+# (or --build-arg locally) to track a newer release.
+ARG OPENCLAW_VERSION=2026.6.8
 FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION} AS openclaw
 
 # ── Stage 2: Runtime ──
 FROM node:22-slim
-ARG OPENCLAW_VERSION=latest
+ARG OPENCLAW_VERSION=2026.6.8
 # DEV_MODE is a runtime-only HF Space Variable (read by start.sh) — it has no
 # effect at build time since node-pty/ws are always installed below. It
 # defaults to unset so start.sh can auto-enable the terminal when
